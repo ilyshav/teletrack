@@ -50,7 +50,6 @@
 | `src/core/DeviceStatus.h` | Plain status struct, produced by config, consumed by ui |
 | `src/config/Settings.h/.cpp` | PUBLIC — settings struct, defaults, validation — pure |
 | `src/config/SettingsStore.h` | PUBLIC — abstract load/save/available |
-| `src/config/StatusProvider.h` | PUBLIC — abstract live-status source |
 | `src/config/ConfigPortal.h/.cpp` | PUBLIC — facade: `begin()`, `tick()`, `status()` |
 | `src/config/internal/MemoryStore.h/.cpp` | In-RAM store — the test double |
 | `src/config/internal/NvsStore.h/.cpp` | Preferences-backed store |
@@ -1392,7 +1391,6 @@ Holds the last N log lines. Deliberately **not** thread-safe: `Display` owns the
   - `void LogRing::append(const char* line)`
   - `const char* LogRing::row(size_t index) const` — index 0 is the oldest visible row
   - `uint32_t LogRing::revision() const`
-  - `void LogRing::clear()`
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1522,16 +1520,6 @@ static void test_row_out_of_range_is_empty() {
   TEST_ASSERT_EQUAL_STRING("", ring.row(9999));
 }
 
-static void test_clear_empties_rows_and_bumps_revision() {
-  LogRing ring;
-  ring.append("a");
-  const uint32_t before = ring.revision();
-
-  ring.clear();
-  TEST_ASSERT_EQUAL_STRING("", ring.row(0));
-  TEST_ASSERT_TRUE(ring.revision() > before);
-}
-
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_fresh_ring_is_all_empty_rows);
@@ -1544,7 +1532,6 @@ int main(int, char**) {
   RUN_TEST(test_null_line_appends_an_empty_row);
   RUN_TEST(test_revision_advances_only_on_append);
   RUN_TEST(test_row_out_of_range_is_empty);
-  RUN_TEST(test_clear_empties_rows_and_bumps_revision);
   return UNITY_END();
 }
 ```
@@ -1584,11 +1571,9 @@ class LogRing {
   // and out-of-range indices, read as "".
   const char* row(size_t index) const;
 
-  // Monotonic; bumped by append() and clear(). Display redraws when this
-  // differs from the revision it last drew.
+  // Monotonic; bumped by append(). Display redraws when this differs from
+  // the revision it last drew.
   uint32_t revision() const;
-
-  void clear();
 
  private:
   char lines_[kRows][kLineSize] = {};
@@ -1641,13 +1626,6 @@ const char* LogRing::row(size_t index) const {
 }
 
 uint32_t LogRing::revision() const { return revision_; }
-
-void LogRing::clear() {
-  memset(lines_, 0, sizeof(lines_));
-  count_ = 0;
-  head_ = 0;
-  ++revision_;
-}
 ```
 
 - [ ] **Step 5: Add `LogRing.cpp` to the host build**
@@ -1668,7 +1646,7 @@ build_src_filter =
 pio test -e native -f native/test_log_ring
 ```
 
-Expected: PASS — `11 Tests 0 Failures 0 Ignored`.
+Expected: PASS — `10 Tests 0 Failures 0 Ignored`.
 
 - [ ] **Step 7: Commit**
 
@@ -2675,7 +2653,6 @@ There is no web UI yet — every URL redirects.
 
 **Files:**
 - Create: `src/core/DeviceStatus.h`
-- Create: `src/config/StatusProvider.h`
 - Create: `src/config/internal/ApManager.h`, `src/config/internal/ApManager.cpp`
 - Create: `src/config/internal/CaptivePortal.h`, `src/config/internal/CaptivePortal.cpp`
 - Create: `src/config/ConfigPortal.h`, `src/config/ConfigPortal.cpp`
@@ -2687,10 +2664,9 @@ There is no web UI yet — every URL redirects.
 - Consumes: `Settings`, `SettingsStore`, `NvsStore`, `Log`, `SerialSink`.
 - Produces:
   - `struct DeviceStatus { char ssid[33]; char ip[16]; uint8_t clients; uint32_t uptimeMs; uint32_t freeHeap; bool apUp; bool persistDegraded; }`
-  - `class StatusProvider` — `virtual DeviceStatus status() const`
   - `class ApManager` — `bool begin(const char* ssid, uint8_t channel, uint8_t maxClients)`, `void tick(uint32_t nowMs)`, `bool up() const`, `uint8_t clients() const`, `const char* ssid() const`, `const char* ip() const`
-  - `class CaptivePortal` — `bool begin(const IPAddress&)`, `void tick()`, `void registerRoutes(AsyncWebServer&)`, `void end()`
-  - `class ConfigPortal : public StatusProvider` — `explicit ConfigPortal(Settings&)`, `bool begin()`, `void tick(uint32_t nowMs)`, `DeviceStatus status() const`, constants `kSsid`, `kChannel`, `kMaxClients`, `kHttpPort`
+  - `class CaptivePortal` — `bool begin(const IPAddress&)`, `void tick()`, `void registerRoutes(AsyncWebServer&)`
+  - `class ConfigPortal` — `explicit ConfigPortal(Settings&)`, `bool begin()`, `void tick(uint32_t nowMs)`, `DeviceStatus status() const`, constants `kSsid`, `kChannel`, `kMaxClients`, `kHttpPort`
   - `size_t ConfigApi::statusToJson(const DeviceStatus&, char* out, size_t outSize)`
 
 **`ConfigPortal` owns its `NvsStore`.** `main.cpp` must not include from `internal/`, so
@@ -2800,23 +2776,7 @@ pio test -e native -f native/test_config_api
 
 Expected: PASS — `17 Tests 0 Failures 0 Ignored`.
 
-- [ ] **Step 6: Write `src/config/StatusProvider.h`**
-
-```cpp
-#pragma once
-
-#include "core/DeviceStatus.h"
-
-// Live status source. WebUi holds one of these rather than reaching into the
-// AP or the store directly, which keeps it pure plumbing.
-class StatusProvider {
- public:
-  virtual ~StatusProvider() = default;
-  virtual DeviceStatus status() const = 0;
-};
-```
-
-- [ ] **Step 7: Write `src/config/internal/ApManager.h`**
+- [ ] **Step 6: Write `src/config/internal/ApManager.h`**
 
 ```cpp
 #pragma once
@@ -2849,7 +2809,7 @@ class ApManager {
 };
 ```
 
-- [ ] **Step 8: Write `src/config/internal/ApManager.cpp`**
+- [ ] **Step 7: Write `src/config/internal/ApManager.cpp`**
 
 ```cpp
 #include "config/internal/ApManager.h"
@@ -2913,7 +2873,7 @@ const char* ApManager::ssid() const { return ssid_; }
 const char* ApManager::ip() const { return ip_; }
 ```
 
-- [ ] **Step 9: Write `src/config/internal/CaptivePortal.h`**
+- [ ] **Step 8: Write `src/config/internal/CaptivePortal.h`**
 
 ```cpp
 #pragma once
@@ -2937,15 +2897,13 @@ class CaptivePortal {
   // Registers the probe routes and the catch-all. Call before server.begin().
   void registerRoutes(AsyncWebServer& server);
 
-  void end();
-
  private:
   DNSServer dns_;
   bool up_ = false;
 };
 ```
 
-- [ ] **Step 10: Write `src/config/internal/CaptivePortal.cpp`**
+- [ ] **Step 9: Write `src/config/internal/CaptivePortal.cpp`**
 
 ```cpp
 #include "config/internal/CaptivePortal.h"
@@ -2990,13 +2948,6 @@ void CaptivePortal::tick() {
   }
 }
 
-void CaptivePortal::end() {
-  if (up_) {
-    dns_.stop();
-    up_ = false;
-  }
-}
-
 void CaptivePortal::registerRoutes(AsyncWebServer& server) {
   for (const char* path : kProbePaths) {
     server.on(path, HTTP_GET, [](AsyncWebServerRequest* request) {
@@ -3013,7 +2964,7 @@ void CaptivePortal::registerRoutes(AsyncWebServer& server) {
 }
 ```
 
-- [ ] **Step 11: Write `src/config/ConfigPortal.h`**
+- [ ] **Step 10: Write `src/config/ConfigPortal.h`**
 
 ```cpp
 #pragma once
@@ -3023,7 +2974,6 @@ void CaptivePortal::registerRoutes(AsyncWebServer& server) {
 
 #include "config/Settings.h"
 #include "config/SettingsStore.h"
-#include "config/StatusProvider.h"
 #include "config/internal/ApManager.h"
 #include "config/internal/CaptivePortal.h"
 #include "config/internal/NvsStore.h"
@@ -3032,7 +2982,7 @@ void CaptivePortal::registerRoutes(AsyncWebServer& server) {
 //
 // Owns the store, the AP, the DNS hijack and the HTTP server. main.cpp only
 // ever calls begin(), tick() and status().
-class ConfigPortal : public StatusProvider {
+class ConfigPortal {
  public:
   static constexpr const char* kSsid = "teletrack";
   static constexpr uint8_t kChannel = 1;
@@ -3049,7 +2999,7 @@ class ConfigPortal : public StatusProvider {
   // Call from loop().
   void tick(uint32_t nowMs);
 
-  DeviceStatus status() const override;
+  DeviceStatus status() const;
 
  private:
   Settings& settings_;
@@ -3060,7 +3010,7 @@ class ConfigPortal : public StatusProvider {
 };
 ```
 
-- [ ] **Step 12: Write `src/config/ConfigPortal.cpp`**
+- [ ] **Step 11: Write `src/config/ConfigPortal.cpp`**
 
 `WebUi` is added to this file in Task 10; for now the portal serves nothing but
 redirects.
@@ -3114,7 +3064,7 @@ DeviceStatus ConfigPortal::status() const {
 }
 ```
 
-- [ ] **Step 13: Write `src/main.cpp`**
+- [ ] **Step 12: Write `src/main.cpp`**
 
 ```cpp
 #ifndef PIO_UNIT_TESTING
@@ -3161,7 +3111,7 @@ void loop() {
 #endif  // PIO_UNIT_TESTING
 ```
 
-- [ ] **Step 14: Build and flash**
+- [ ] **Step 13: Build and flash**
 
 ```bash
 pio run -e esp -t upload
@@ -3179,7 +3129,7 @@ Expected serial output within a few seconds of boot:
 00:00:00 [INF] http: listening on port 80
 ```
 
-- [ ] **Step 15: Verify the captive portal on a real device**
+- [ ] **Step 14: Verify the captive portal on a real device**
 
 Connect a phone to the open `teletrack` network. Expected:
 1. The "Sign in to network" sheet appears on its own.
@@ -3187,10 +3137,10 @@ Connect a phone to the open `teletrack` network. Expected:
    is no UI yet. That is correct for this task.
 3. The serial log prints `[INF] ap: clients 0 -> 1` within a second of connecting.
 
-- [ ] **Step 16: Commit**
+- [ ] **Step 15: Commit**
 
 ```bash
-git add src/core/DeviceStatus.h src/config/StatusProvider.h src/config/ConfigPortal.h src/config/ConfigPortal.cpp src/config/internal/ApManager.h src/config/internal/ApManager.cpp src/config/internal/CaptivePortal.h src/config/internal/CaptivePortal.cpp src/config/internal/ConfigApi.h src/config/internal/ConfigApi.cpp src/main.cpp test/native/test_config_api/test_config_api.cpp
+git add src/core/DeviceStatus.h src/config/ConfigPortal.h src/config/ConfigPortal.cpp src/config/internal/ApManager.h src/config/internal/ApManager.cpp src/config/internal/CaptivePortal.h src/config/internal/CaptivePortal.cpp src/config/internal/ConfigApi.h src/config/internal/ConfigApi.cpp src/main.cpp test/native/test_config_api/test_config_api.cpp
 git commit -m "Add SoftAP, captive portal and ConfigPortal facade"
 ```
 
@@ -3208,10 +3158,10 @@ settings can be read and written from a phone.
 - Modify: `src/config/ConfigPortal.h`, `src/config/ConfigPortal.cpp`
 
 **Interfaces:**
-- Consumes: `ConfigApi`, `ConfigService`, `Settings`, `SettingsStore`, `StatusProvider`.
+- Consumes: `ConfigApi`, `ConfigService`, `Settings`, `SettingsStore`, `ConfigPortal`.
 - Produces:
   - `kUiIndexGz` (`const uint8_t[]`) and `kUiIndexGzLength` (`size_t`) in `ui_index.h`
-  - `class WebUi` — `WebUi(Settings&, SettingsStore&, const StatusProvider&)`, `void registerRoutes(AsyncWebServer&)`
+  - `class WebUi` — `WebUi(Settings&, SettingsStore&, const ConfigPortal&)`, `void registerRoutes(AsyncWebServer&)`
 
 **Scoped exception to the "no Arduino `String`" rule:** ESPAsyncWebServer takes
 `const String&` for content types and redirect targets. Passing a string literal there
@@ -3514,15 +3464,18 @@ and a header starting with the generated-file comment and `inline constexpr size
 
 #include "config/Settings.h"
 #include "config/SettingsStore.h"
-#include "config/StatusProvider.h"
 #include "config/internal/ConfigApi.h"
+
+// Forward-declared, not included: ConfigPortal.h includes this header for its
+// WebUi member, so including it back would be circular. WebUi.cpp includes it.
+class ConfigPortal;
 
 // HTTP plumbing. Every decision it makes is delegated: ConfigApi for
 // serialisation, ConfigService for saves. If logic starts accumulating here,
 // it belongs in one of those instead.
 class WebUi {
  public:
-  WebUi(Settings& settings, SettingsStore& store, const StatusProvider& status);
+  WebUi(Settings& settings, SettingsStore& store, const ConfigPortal& portal);
 
   // Call before AsyncWebServer::begin().
   void registerRoutes(AsyncWebServer& server);
@@ -3534,7 +3487,7 @@ class WebUi {
 
   Settings& settings_;
   SettingsStore& store_;
-  const StatusProvider& status_;
+  const ConfigPortal& portal_;
 
   // POST body accumulation. One buffer is enough: the AsyncTCP task delivers
   // request bodies one at a time, and owner_ guards against a completion
@@ -3553,6 +3506,7 @@ class WebUi {
 
 #include <string.h>
 
+#include "config/ConfigPortal.h"
 #include "config/internal/ConfigService.h"
 #include "config/internal/ui_index.h"
 #include "core/Log.h"
@@ -3569,8 +3523,8 @@ void sendJson(AsyncWebServerRequest* request, uint16_t status, const char* body,
 
 }  // namespace
 
-WebUi::WebUi(Settings& settings, SettingsStore& store, const StatusProvider& status)
-    : settings_(settings), store_(store), status_(status) {}
+WebUi::WebUi(Settings& settings, SettingsStore& store, const ConfigPortal& portal)
+    : settings_(settings), store_(store), portal_(portal) {}
 
 void WebUi::registerRoutes(AsyncWebServer& server) {
   server.on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
@@ -3590,7 +3544,7 @@ void WebUi::registerRoutes(AsyncWebServer& server) {
   });
 
   server.on("/api/status", HTTP_GET, [this](AsyncWebServerRequest* request) {
-    const DeviceStatus snapshot = status_.status();
+    const DeviceStatus snapshot = portal_.status();
     char body[ConfigApi::kJsonBufferSize];
     const size_t n = ConfigApi::statusToJson(snapshot, body, sizeof(body));
     sendJson(request, 200, body, n);
@@ -4153,7 +4107,7 @@ data/ui/      the web UI source; gzipped into a C header at build time
 
 `src/config/` is cut by feature, not by layer: WiFi, DNS, HTTP and persistence all
 exist to configure the device, so they live together behind `ConfigPortal`. Only
-`Settings`, `SettingsStore`, `StatusProvider` and `ConfigPortal` are public — a
+`Settings`, `SettingsStore` and `ConfigPortal` are public — a
 future GPS module includes `config/Settings.h` to read the sample rate without
 pulling in the network stack.
 
@@ -4189,3 +4143,28 @@ git commit -m "Document Phase 1 build, usage and module layout"
 5. **`-fno-exceptions -fno-rtti` are applied to both environments** via `[common]`.
    They are already the default for Arduino-ESP32 builds, so on the device they are
    redundant; on the host they are what the spec asked for.
+
+## Simplification pass (2026-09-06)
+
+This is a proof of concept, not a shipping product. After Task 4 the following were
+cut from the remaining tasks as unearned abstraction:
+
+- **`StatusProvider`** — a pure-virtual interface with exactly one implementation
+  (`ConfigPortal`) and exactly one consumer (`WebUi`). `WebUi` now holds
+  `const ConfigPortal&` and forward-declares it to avoid the circular include.
+  One fewer file, one fewer indirection, identical behaviour.
+- **`LogRing::clear()`** — no caller anywhere in the plan.
+- **`CaptivePortal::end()`** — no caller; the AP runs from boot to power-down.
+- **The no-heap-allocation constraint** — ArduinoJson 7 removed `StaticJsonDocument`,
+  and writing a custom pool allocator to route around that costs far more complexity
+  than the fragmentation it avoids on a device serving a config page.
+
+Deliberately kept, and why:
+
+- **`SettingsStore` + `MemoryStore`** — `NvsStore` cannot compile on the host, so
+  without this seam the save/rollback/degraded paths have no host tests at all.
+- **`ConfigService`** — holds the save semantics (validate, persist, roll back,
+  choose a status code). Inside `WebUi` none of it would be testable.
+- **`LogSink`** — keeps `Log` free of any TFT knowledge. It is 15 lines.
+- **`Display`'s mutex and snapshot** — the AsyncTCP task and `loop()` genuinely race
+  on the log buffer. This is correctness, not gilding.
