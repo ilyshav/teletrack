@@ -259,9 +259,15 @@ font 2 was monospace, which it isn't. Both dimensions are named constants in
 `Display.h` and can be retuned without touching `LogRing`.)
 
 `LogRing` holds 20 lines × 56 chars, overwriting the oldest. Lines longer than 53
-columns are truncated with a trailing `~`. Each row carries a monotonically
-increasing generation counter; `tick()` redraws only rows whose generation changed
-since the last frame, so one new line does not repaint the whole region.
+columns are truncated with a trailing `~`.
+
+The ring exposes a single monotonic `revision()` counter, bumped on every append.
+`tick()` redraws the whole log region when the revision differs from the last drawn
+one. Per-row change tracking would buy nothing here: the console scrolls, so a single
+new line shifts the content of every row. A full-region redraw is ~1060 characters at
+6×8 px ≈ 50 k pixels ≈ 20 ms over 40 MHz SPI, comfortably inside the 100 ms frame
+budget. Text is drawn with an opaque background colour so each glyph overwrites the
+previous one in place — no clear-then-draw, so no flicker.
 
 Redraws are rate-limited to 10 Hz. A burst of log lines coalesces into a single
 frame rather than queueing 30 full-region repaints.
@@ -300,10 +306,9 @@ generated header is gitignored — the HTML is the source of truth.
 
 `platformio.ini` gains:
 
-- `esp32async/ESPAsyncWebServer` and its `AsyncTCP` dependency, pinned to explicit
-  versions. This library has a messy fork history; the maintained fork is the
-  `esp32async` one. The exact resolvable version is confirmed against the registry
-  during implementation and pinned then — not guessed here.
+- `esp32async/ESPAsyncWebServer@3.12.0` and `esp32async/AsyncTCP@3.5.0`. This library
+  has a messy fork history; the maintained fork is the `esp32async` one, confirmed
+  against the PlatformIO registry on 2026-09-06.
 - `board_build.partitions = default_16MB.csv`.
 - `extra_scripts = pre:tools/embed_ui.py`.
 - `build_unflags`/`build_flags` for `-fno-exceptions -fno-rtti -std=gnu++17`.
@@ -338,8 +343,8 @@ that explains why.
   JSON; partial payload leaves omitted fields untouched; a payload with one bad
   field writes nothing; error-shape matches the documented JSON.
 - **LogRing**: append below capacity; wrap-around past capacity preserves the newest
-  N in order; over-long line truncation; generation counters advance only on
-  changed rows.
+  N in order; over-long line truncation; `revision()` advances on every append and
+  only on append.
 - **Format**: `formatUptime` at 0, sub-second, minute rollover, and hour rollover;
   `formatLine` truncation and level rendering.
 
