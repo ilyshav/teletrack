@@ -2436,7 +2436,7 @@ size_t statusToJson(const DeviceStatus& status, char* out, size_t outSize) {
   doc["uptimeMs"] = status.uptimeMs;
   doc["freeHeap"] = status.freeHeap;
   doc["apUp"] = status.apUp;
-  return serializeIfItFits(doc, out, outSize);
+  return serializeJson(doc, out, outSize);
 }
 ```
 
@@ -2647,6 +2647,7 @@ void CaptivePortal::registerRoutes(AsyncWebServer& server) {
 #include "config/Settings.h"
 #include "config/SettingsStore.h"
 #include "config/internal/ApManager.h"
+#include "core/DeviceStatus.h"
 #include "config/internal/CaptivePortal.h"
 #include "config/internal/NvsStore.h"
 
