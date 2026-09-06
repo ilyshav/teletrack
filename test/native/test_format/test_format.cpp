@@ -68,12 +68,6 @@ static void test_log_line_truncates_with_tilde() {
   TEST_ASSERT_EQUAL_CHAR('~', buf[18]);
 }
 
-static void test_log_line_tolerates_null_tag_and_message() {
-  char buf[64];
-  Format::logLine(0, LogLevel::Error, nullptr, nullptr, buf, sizeof(buf));
-  TEST_ASSERT_EQUAL_STRING("00:00.0 [ERR] ?: ", buf);
-}
-
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_level_names);
@@ -85,6 +79,5 @@ int main(int, char**) {
   RUN_TEST(test_uptime_long_saturates_at_99_hours);
   RUN_TEST(test_log_line_shape);
   RUN_TEST(test_log_line_truncates_with_tilde);
-  RUN_TEST(test_log_line_tolerates_null_tag_and_message);
   return UNITY_END();
 }

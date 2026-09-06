@@ -4,12 +4,6 @@
 #include <string.h>
 
 void ValidationResult::add(const char* field, const char* message) {
-  for (size_t i = 0; i < count; ++i) {
-    if (strcmp(errors[i].field, field) == 0) {
-      errors[i].message = message;
-      return;
-    }
-  }
   if (count >= kMaxErrors) {
     return;
   }

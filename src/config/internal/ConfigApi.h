@@ -5,9 +5,9 @@
 
 #include "config/Settings.h"
 
-// Wire format for the settings API. Pure: no HTTP, no storage. Every *ToJson
-// function returns the number of characters written, or 0 when the output
-// buffer is too small — it never emits a truncated document.
+// Wire format for the settings API. Pure: no HTTP, no storage. The *ToJson
+// functions return the number of characters written; callers pass a
+// kJsonBufferSize buffer, which is far larger than any document produced here.
 namespace ConfigApi {
 
 // Largest POST body accepted. Anything longer is rejected before buffering.

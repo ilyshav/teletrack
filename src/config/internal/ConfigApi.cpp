@@ -5,34 +5,17 @@
 #include <string.h>
 
 namespace ConfigApi {
-namespace {
-
-size_t serializeIfItFits(const JsonDocument& doc, char* out, size_t outSize) {
-  if (out == nullptr || measureJson(doc) + 1 > outSize) {
-    return 0;
-  }
-  return serializeJson(doc, out, outSize);
-}
-
-}  // namespace
 
 size_t toJson(const Settings& s, char* out, size_t outSize) {
   JsonDocument doc;
   doc["schemaVersion"] = s.schemaVersion;
   doc["deviceName"] = s.deviceName;
   doc["sampleHz"] = s.sampleHz;
-  return serializeIfItFits(doc, out, outSize);
+  return serializeJson(doc, out, outSize);
 }
 
 size_t okToJson(char* out, size_t outSize) {
-  if (out == nullptr) {
-    return 0;
-  }
-  const int n = snprintf(out, outSize, "{\"ok\":true}");
-  if (n < 0 || static_cast<size_t>(n) >= outSize) {
-    return 0;
-  }
-  return static_cast<size_t>(n);
+  return static_cast<size_t>(snprintf(out, outSize, "{\"ok\":true}"));
 }
 
 size_t errorsToJson(const ValidationResult& v, char* out, size_t outSize) {
@@ -42,7 +25,7 @@ size_t errorsToJson(const ValidationResult& v, char* out, size_t outSize) {
   for (size_t i = 0; i < v.count; ++i) {
     errors[v.errors[i].field] = v.errors[i].message;
   }
-  return serializeIfItFits(doc, out, outSize);
+  return serializeJson(doc, out, outSize);
 }
 
 size_t storageErrorToJson(char* out, size_t outSize) {
@@ -55,7 +38,7 @@ ParseResult applyJson(const char* body, size_t len, Settings& inOut) {
   ParseResult result;
   result.status = ParseStatus::BadJson;
 
-  if (body == nullptr || len == 0 || len > kMaxBodyBytes) {
+  if (len > kMaxBodyBytes) {
     return result;
   }
 
@@ -79,14 +62,13 @@ ParseResult applyJson(const char* body, size_t len, Settings& inOut) {
   // so it would report "saved" while silently discarding {"sampleHz":null}.
   const JsonVariantConst nameField = obj["deviceName"];
   if (nameField.is<JsonVariantConst>()) {
-    const char* name =
-        nameField.is<const char*>() ? nameField.as<const char*>() : nullptr;
+    const char* name = nameField.as<const char*>();
     // An over-long name is rejected, never silently clipped to the buffer size.
-    if (name == nullptr || strlen(name) >= Settings::kDeviceNameSize) {
+    if (!nameField.is<const char*>() ||
+        strlen(name) >= Settings::kDeviceNameSize) {
       typeErrors.add("deviceName", SettingsError::kDeviceName);
     } else {
-      memset(candidate.deviceName, 0, sizeof(candidate.deviceName));
-      memcpy(candidate.deviceName, name, strlen(name));
+      snprintf(candidate.deviceName, sizeof(candidate.deviceName), "%s", name);
     }
   }
 

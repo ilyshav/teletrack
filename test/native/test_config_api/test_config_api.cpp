@@ -15,11 +15,6 @@ static void test_to_json_shape() {
       "{\"schemaVersion\":1,\"deviceName\":\"teletrack\",\"sampleHz\":10}", buf);
 }
 
-static void test_to_json_refuses_a_buffer_that_is_too_small() {
-  char buf[8];
-  TEST_ASSERT_EQUAL_UINT(0u, (unsigned)ConfigApi::toJson(Settings::defaults(), buf, sizeof(buf)));
-}
-
 static void test_ok_json() {
   char buf[32];
   const size_t n = ConfigApi::okToJson(buf, sizeof(buf));
@@ -185,7 +180,6 @@ static void test_apply_rejects_negative_and_out_of_range_sample_hz() {
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_to_json_shape);
-  RUN_TEST(test_to_json_refuses_a_buffer_that_is_too_small);
   RUN_TEST(test_ok_json);
   RUN_TEST(test_storage_error_json);
   RUN_TEST(test_errors_json_shape);

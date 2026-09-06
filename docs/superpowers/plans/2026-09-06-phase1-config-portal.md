@@ -989,8 +989,8 @@ without a network stack.
   - `size_t ConfigApi::storageErrorToJson(char* out, size_t outSize)`
   - `ConfigApi::kMaxBodyBytes == 1024`, `ConfigApi::kJsonBufferSize == 512`
 
-All the `*ToJson` functions return the number of characters written, or `0` when the
-output buffer is too small — they never write a truncated document.
+The `*ToJson` functions return the number of characters written. Callers pass a
+`kJsonBufferSize` buffer, which is far larger than any document produced here.
 
 - [ ] **Step 1: Write the failing test**
 

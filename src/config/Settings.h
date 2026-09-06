@@ -24,9 +24,6 @@ struct ValidationResult {
 
   bool ok() const { return count == 0; }
 
-  // Adds an error, replacing any existing error for the same field. Silently
-  // drops the error if kMaxErrors is already reached — there are only two
-  // fields, so that cannot happen in practice.
   void add(const char* field, const char* message);
 
   // Returns nullptr when the field has no error.

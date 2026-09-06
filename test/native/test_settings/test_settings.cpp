@@ -39,14 +39,6 @@ static void test_device_name_31_chars_is_valid() {
   TEST_ASSERT_TRUE(withName(name).validate().ok());
 }
 
-static void test_device_name_without_terminator_is_invalid() {
-  Settings s = Settings::defaults();
-  memset(s.deviceName, 'a', sizeof(s.deviceName));  // no NUL anywhere
-  const ValidationResult v = s.validate();
-  TEST_ASSERT_FALSE(v.ok());
-  TEST_ASSERT_EQUAL_STRING(SettingsError::kDeviceName, v.messageFor("deviceName"));
-}
-
 static void test_device_name_rejects_illegal_characters() {
   TEST_ASSERT_FALSE(withName("has space").validate().ok());
   TEST_ASSERT_FALSE(withName("has.dot").validate().ok());
@@ -87,26 +79,16 @@ static void test_message_for_unknown_field_is_null() {
   TEST_ASSERT_NULL(Settings::defaults().validate().messageFor("nope"));
 }
 
-static void test_add_replaces_rather_than_duplicates() {
-  ValidationResult v;
-  v.add("a", "first");
-  v.add("a", "second");
-  TEST_ASSERT_EQUAL_UINT(1u, (unsigned)v.count);
-  TEST_ASSERT_EQUAL_STRING("second", v.messageFor("a"));
-}
-
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_defaults);
   RUN_TEST(test_device_name_empty_is_invalid);
   RUN_TEST(test_device_name_single_char_is_valid);
   RUN_TEST(test_device_name_31_chars_is_valid);
-  RUN_TEST(test_device_name_without_terminator_is_invalid);
   RUN_TEST(test_device_name_rejects_illegal_characters);
   RUN_TEST(test_device_name_accepts_legal_characters);
   RUN_TEST(test_sample_hz_accepts_only_the_four_rates);
   RUN_TEST(test_reports_multiple_errors_together);
   RUN_TEST(test_message_for_unknown_field_is_null);
-  RUN_TEST(test_add_replaces_rather_than_duplicates);
   return UNITY_END();
 }

@@ -5,9 +5,6 @@
 namespace Format {
 
 void uptimeShort(uint32_t ms, char* out, size_t outSize) {
-  if (out == nullptr || outSize == 0) {
-    return;
-  }
   const unsigned deci = static_cast<unsigned>((ms / 100u) % 10u);
   const unsigned secs = static_cast<unsigned>((ms / 1000u) % 60u);
   const unsigned mins = static_cast<unsigned>((ms / 60000u) % 100u);
@@ -15,13 +12,12 @@ void uptimeShort(uint32_t ms, char* out, size_t outSize) {
 }
 
 void uptimeLong(uint32_t ms, char* out, size_t outSize) {
-  if (out == nullptr || outSize == 0) {
-    return;
-  }
   const uint32_t total = ms / 1000u;
   unsigned hours = static_cast<unsigned>(total / 3600u);
   unsigned mins = static_cast<unsigned>((total / 60u) % 60u);
   unsigned secs = static_cast<unsigned>(total % 60u);
+  // millis() wraps at ~49 days, so hours can reach 1193 and overrun a
+  // fixed-width field. Saturating keeps the column aligned.
   if (hours > 99u) {
     hours = 99u;
     mins = 59u;
@@ -32,22 +28,11 @@ void uptimeLong(uint32_t ms, char* out, size_t outSize) {
 
 void logLine(uint32_t ms, LogLevel level, const char* tag, const char* msg,
              char* out, size_t outSize) {
-  if (out == nullptr || outSize < 2) {
-    if (out != nullptr && outSize == 1) {
-      out[0] = '\0';
-    }
-    return;
-  }
   char stamp[9];
   uptimeShort(ms, stamp, sizeof(stamp));
 
   const int written = snprintf(out, outSize, "%s [%s] %s: %s", stamp,
-                               logLevelName(level), tag != nullptr ? tag : "?",
-                               msg != nullptr ? msg : "");
-  if (written < 0) {
-    out[0] = '\0';
-    return;
-  }
+                               logLevelName(level), tag, msg);
   if (static_cast<size_t>(written) >= outSize) {
     out[outSize - 2] = '~';
   }
