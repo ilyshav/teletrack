@@ -2303,13 +2303,15 @@ SaveOutcome save(const char* requestBody, size_t len, Settings& settings,
 build_src_filter =
     -<*>
     +<core/Format.cpp>
-    +<core/Log.cpp>
     +<config/Settings.cpp>
     +<config/internal/MemoryStore.cpp>
     +<config/internal/ConfigApi.cpp>
     +<config/internal/ConfigService.cpp>
     +<core/LogRing.cpp>
 ```
+
+`core/Log.cpp` is deliberately **not** in this list. It includes `Arduino.h` and would
+break the host build — see Task 6, which is device-only by design.
 
 - [ ] **Step 7: Run the test to verify it passes**
 
