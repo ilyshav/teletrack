@@ -9,6 +9,8 @@ namespace SettingsError {
 inline constexpr const char* kDeviceName = "1-31 characters, letters digits _ - only";
 inline constexpr const char* kSampleHz = "must be 1, 5, 10 or 25";
 inline constexpr const char* kStorage = "could not write to storage";
+inline constexpr const char* kBadJson = "malformed JSON body";
+inline constexpr const char* kTooLarge = "body exceeds 1024 bytes";
 }  // namespace SettingsError
 
 struct ValidationResult {
