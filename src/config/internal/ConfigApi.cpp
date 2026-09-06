@@ -33,6 +33,17 @@ size_t storageErrorToJson(char* out, size_t outSize) {
   return errorsToJson(v, out, outSize);
 }
 
+size_t statusToJson(const DeviceStatus& status, char* out, size_t outSize) {
+  JsonDocument doc;
+  doc["ssid"] = status.ssid;
+  doc["ip"] = status.ip;
+  doc["clients"] = status.clients;
+  doc["uptimeMs"] = status.uptimeMs;
+  doc["freeHeap"] = status.freeHeap;
+  doc["apUp"] = status.apUp;
+  return serializeJson(doc, out, outSize);
+}
+
 ParseResult applyJson(const char* body, size_t len, Settings& inOut) {
   ParseResult result;
   result.status = ParseStatus::BadJson;

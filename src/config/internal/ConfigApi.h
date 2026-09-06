@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include "config/Settings.h"
+#include "core/DeviceStatus.h"
 
 // Wire format for the settings API. Pure: no HTTP, no storage. The *ToJson
 // functions return the number of characters written; callers pass a
@@ -36,5 +37,7 @@ ParseResult applyJson(const char* body, size_t len, Settings& inOut);
 size_t okToJson(char* out, size_t outSize);
 size_t errorsToJson(const ValidationResult& v, char* out, size_t outSize);
 size_t storageErrorToJson(char* out, size_t outSize);
+
+size_t statusToJson(const DeviceStatus& status, char* out, size_t outSize);
 
 }  // namespace ConfigApi

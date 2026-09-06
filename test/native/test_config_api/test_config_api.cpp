@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "config/internal/ConfigApi.h"
+#include "core/DeviceStatus.h"
 
 void setUp() {}
 void tearDown() {}
@@ -168,6 +169,23 @@ static void test_apply_rejects_negative_and_out_of_range_sample_hz() {
   }
 }
 
+static void test_status_json_shape() {
+  DeviceStatus status;
+  snprintf(status.ssid, sizeof(status.ssid), "%s", "teletrack");
+  snprintf(status.ip, sizeof(status.ip), "%s", "192.168.4.1");
+  status.clients = 1;
+  status.uptimeMs = 134221;
+  status.freeHeap = 186432;
+  status.apUp = true;
+
+  char buf[ConfigApi::kJsonBufferSize];
+  ConfigApi::statusToJson(status, buf, sizeof(buf));
+  TEST_ASSERT_EQUAL_STRING(
+      "{\"ssid\":\"teletrack\",\"ip\":\"192.168.4.1\",\"clients\":1,"
+      "\"uptimeMs\":134221,\"freeHeap\":186432,\"apUp\":true}",
+      buf);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_to_json_shape);
@@ -186,5 +204,6 @@ int main(int, char**) {
   RUN_TEST(test_apply_rejects_an_explicit_null_sample_hz);
   RUN_TEST(test_apply_rejects_an_explicit_null_device_name);
   RUN_TEST(test_apply_rejects_negative_and_out_of_range_sample_hz);
+  RUN_TEST(test_status_json_shape);
   return UNITY_END();
 }
