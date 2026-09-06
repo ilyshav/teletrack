@@ -17,7 +17,10 @@
 - C++ standard `gnu++17`. Build with `-fno-exceptions -fno-rtti`.
 - Fixed-size `char` buffers only. No Arduino `String`, no `std::string`, no `std::vector`,
   no heap allocation after `setup()` returns.
-- One class per file, header/implementation split, `#pragma once` in every header.
+- One module per file pair, header/implementation split, `#pragma once` in every
+  header. A small value type may share its producer's header when it has no
+  independent use — `ValidationResult` lives in `Settings.h` because
+  `Settings::validate()` is its only producer.
 - No global variables except a single `App` struct in `main.cpp`.
 - All string building goes through `snprintf`/`vsnprintf` with an explicit size.
 - Nothing outside `src/config/` may include from `src/config/internal/`. Tests are part of
