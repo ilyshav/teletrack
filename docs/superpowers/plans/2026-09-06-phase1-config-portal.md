@@ -114,7 +114,6 @@ platform = espressif32
 board = esp32-s3-devkitc-1
 framework = arduino
 board_build.flash_size = 16MB
-board_build.partitions = default_16MB.csv
 board_build.arduino.memory_type = qio_opi
 build_flags =
     ${common.build_flags}
@@ -3737,6 +3736,19 @@ git commit -m "Document Phase 1 build, usage and module layout"
 5. **`-fno-exceptions -fno-rtti` are applied to both environments** via `[common]`.
    They are already the default for Arduino-ESP32 builds, so on the device they are
    redundant; on the host they are what the spec asked for.
+
+## Hardware note: do not set `board_build.partitions`
+
+Setting `board_build.partitions = default_16MB.csv` makes this board boot-loop. It loads
+the second-stage bootloader, then resets with `rst:0x3 (RTC_SW_SYS_RST)` roughly forty
+times a second and never reaches the app — no serial output, dark display. Confirmed by
+A/B on hardware on 2026-09-06: with the line, boot loop; without it, the on-device suite
+passes 5/5. This was the original failure, and the plan introduced it.
+
+The stock table gives a ~1.25 MB app partition, which is enough — the reference project
+at `~/workspace/playr` ships 1.16 MB. If the firmware ever outgrows it, try
+`huge_app.csv` or `min_spiffs.csv` rather than the `*_16MB` tables, and re-verify on
+hardware before building on top of it.
 
 ## Follow-ups for later phases
 

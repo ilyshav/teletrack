@@ -306,7 +306,8 @@ generated header is gitignored — the HTML is the source of truth.
 - `esp32async/ESPAsyncWebServer@3.12.0` and `esp32async/AsyncTCP@3.5.0`. This library
   has a messy fork history; the maintained fork is the `esp32async` one, confirmed
   against the PlatformIO registry on 2026-09-06.
-- `board_build.partitions = default_16MB.csv`.
+- No `board_build.partitions`: setting it to `default_16MB.csv` boot-loops the board
+  (verified on hardware). The stock table's ~1.25 MB app partition is sufficient.
 - `extra_scripts = pre:tools/embed_ui.py`.
 - `build_unflags`/`build_flags` for `-fno-exceptions -fno-rtti -std=gnu++17`.
 - A second environment, `[env:native]`, running host tests with no Arduino
