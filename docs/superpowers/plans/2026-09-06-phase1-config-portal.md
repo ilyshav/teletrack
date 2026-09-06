@@ -1540,9 +1540,9 @@ int main(int, char**) {
 pio test -e native -f native/test_log_ring
 ```
 
-Expected: FAIL — `fatal error: ui/LogRing.h: No such file or directory`.
+Expected: FAIL — `fatal error: core/LogRing.h: No such file or directory`.
 
-- [ ] **Step 3: Write `src/ui/LogRing.h`**
+- [ ] **Step 3: Write `src/core/LogRing.h`**
 
 ```cpp
 #pragma once
