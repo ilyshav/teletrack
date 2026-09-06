@@ -44,9 +44,7 @@
 | `src/main.cpp` | Wiring and `loop()` pump only |
 | `src/core/LogLevel.h` | `LogLevel` enum + `logLevelName()`, header-only |
 | `src/core/Format.h/.cpp` | Uptime and log-line formatting — pure |
-| `src/core/LogSink.h` | Abstract sink interface |
-| `src/core/Log.h/.cpp` | Fan-out logger, no knowledge of any sink implementation |
-| `src/core/SerialSink.h/.cpp` | `LogSink` → USB CDC |
+| `src/core/Log.h/.cpp` | Serial + on-screen logging; owns the console ring and its lock |
 | `src/core/DeviceStatus.h` | Plain status struct, produced by config, consumed by ui |
 | `src/config/Settings.h/.cpp` | PUBLIC — settings struct, defaults, validation — pure |
 | `src/config/SettingsStore.h` | PUBLIC — abstract load/save/available |
@@ -58,8 +56,8 @@
 | `src/config/internal/CaptivePortal.h/.cpp` | DNSServer wildcard + OS-probe routes |
 | `src/config/internal/WebUi.h/.cpp` | HTTP route registration only |
 | `src/config/internal/ui_index.h` | Generated, gitignored |
-| `src/ui/LogRing.h/.cpp` | Fixed ring of log lines — pure |
-| `src/ui/Display.h/.cpp` | `LogSink` implementation that owns TFT_eSPI |
+| `src/core/LogRing.h/.cpp` | Fixed ring of log lines — pure |
+| `src/ui/Display.h/.cpp` | Draws the header and console; owns TFT_eSPI |
 | `test/native/test_*/` | Host tests, no Arduino, no hardware |
 | `test/embedded/test_*/` | On-device tests |
 
@@ -1380,7 +1378,7 @@ Holds the last N log lines. Deliberately **not** thread-safe: `Display` owns the
 `LogRing` owns the data. That split is what keeps it host-testable.
 
 **Files:**
-- Create: `src/ui/LogRing.h`, `src/ui/LogRing.cpp`
+- Create: `src/core/LogRing.h`, `src/core/LogRing.cpp`
 - Modify: `platformio.ini` (`build_src_filter`)
 - Test: `test/native/test_log_ring/test_log_ring.cpp`
 
@@ -1401,7 +1399,7 @@ Create `test/native/test_log_ring/test_log_ring.cpp`:
 #include <stdio.h>
 #include <string.h>
 
-#include "ui/LogRing.h"
+#include "core/LogRing.h"
 
 void setUp() {}
 void tearDown() {}
@@ -1583,10 +1581,10 @@ class LogRing {
 };
 ```
 
-- [ ] **Step 4: Write `src/ui/LogRing.cpp`**
+- [ ] **Step 4: Write `src/core/LogRing.cpp`**
 
 ```cpp
-#include "ui/LogRing.h"
+#include "core/LogRing.h"
 
 #include <string.h>
 
@@ -1637,7 +1635,7 @@ build_src_filter =
     +<config/Settings.cpp>
     +<config/internal/MemoryStore.cpp>
     +<config/internal/ConfigApi.cpp>
-    +<ui/LogRing.cpp>
+    +<core/LogRing.cpp>
 ```
 
 - [ ] **Step 6: Run the test to verify it passes**
@@ -1651,214 +1649,41 @@ Expected: PASS — `10 Tests 0 Failures 0 Ignored`.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add platformio.ini src/ui/LogRing.h src/ui/LogRing.cpp test/native/test_log_ring/test_log_ring.cpp
+git add platformio.ini src/core/LogRing.h src/core/LogRing.cpp test/native/test_log_ring/test_log_ring.cpp
 git commit -m "Add LogRing console buffer"
 ```
 
 ---
 
-### Task 6: `Log` fan-out and `SerialSink`
+### Task 6: `Log` — serial and on-screen logging
 
-`Log` formats once and hands the result to every registered sink. It knows nothing about
-TFT, serial or HTTP — that is what lets a future SD-card sink be added without touching a
-single call site.
+One module owns logging: it formats a line once, prints it to serial, and appends it
+to the on-screen console buffer.
 
 **Files:**
-- Create: `src/core/LogSink.h`
 - Create: `src/core/Log.h`, `src/core/Log.cpp`
-- Create: `src/core/SerialSink.h`, `src/core/SerialSink.cpp`
-- Modify: `platformio.ini` (`build_src_filter`)
-- Test: `test/native/test_log/test_log.cpp`
 
 **Interfaces:**
-- Consumes: `LogLevel`, `Format` from Task 1.
+- Consumes: `Format`, `LogLevel` (Task 1), `LogRing` (Task 5).
 - Produces:
-  - `class LogSink` — `virtual void write(LogLevel, uint32_t uptimeMs, const char* tag, const char* message)`
-  - `using Log::NowFn = uint32_t (*)()`
-  - `void Log::begin(NowFn now)`, `bool Log::addSink(LogSink*)`, `void Log::reset()`
-  - `void Log::debug/info/warn/error(const char* tag, const char* fmt, ...)`
-  - `Log::kMaxSinks == 4`, `Log::kMaxMessageBytes == 160`
-  - `class SerialSink : public LogSink` with `void begin(unsigned long baud)`
+  - `void Log::begin(unsigned long baud)`
+  - `void Log::info/warn/error(const char* tag, const char* fmt, ...)`
+  - `void Log::snapshot(LogRing& dest)` — copies the console under the lock
+  - `uint32_t Log::revision()`
+  - `Log::kMaxMessageBytes == 160`
 
-**Why there is no mutex in `Log`:** the format buffer is a stack local, so concurrent
-callers never share it, and the sink array is written only during `setup()` and read-only
-afterwards. Per-sink thread-safety is each sink's own problem — `Display` takes a
-critical section, `SerialSink` does not need one.
+**Why there is no test for this task.** `Log` is `Serial`, `millis()` and a FreeRTOS
+mutex — all Arduino, none of it host-buildable. Its only logic is "format once, write
+to two places", and the half that has logic, `LogRing`, is already host-tested in Task 5.
+A host test here would need three fakes to assert nothing. Do **not** add
+`core/Log.cpp` to `[env:native]`'s `build_src_filter`.
 
-- [ ] **Step 1: Write the failing test**
+**Concurrency.** `Log::info` is called from the AsyncTCP task (HTTP handlers) and from
+`loop()`. The format buffer is a stack local, so concurrent callers never share it; only
+the ring append takes the mutex. `Display` copies the ring out under that same mutex and
+draws from its own copy, so drawing never holds the lock.
 
-Create `test/native/test_log/test_log.cpp`:
-
-```cpp
-#include <unity.h>
-#include <stdio.h>
-#include <string.h>
-
-#include "core/Log.h"
-
-namespace {
-
-// Records the last record and a call count. Fixed buffers, no allocation.
-class RecordingSink : public LogSink {
- public:
-  void write(LogLevel level, uint32_t uptimeMs, const char* tag,
-             const char* message) override {
-    ++calls;
-    lastLevel = level;
-    lastUptimeMs = uptimeMs;
-    snprintf(lastTag, sizeof(lastTag), "%s", tag != nullptr ? tag : "");
-    snprintf(lastMessage, sizeof(lastMessage), "%s", message != nullptr ? message : "");
-  }
-
-  unsigned calls = 0;
-  LogLevel lastLevel = LogLevel::Debug;
-  uint32_t lastUptimeMs = 0;
-  char lastTag[32] = {};
-  char lastMessage[Log::kMaxMessageBytes] = {};
-};
-
-uint32_t fakeNowMs = 0;
-uint32_t fakeNow() { return fakeNowMs; }
-
-}  // namespace
-
-void setUp() {
-  Log::reset();
-  fakeNowMs = 0;
-}
-void tearDown() { Log::reset(); }
-
-static void test_message_reaches_a_registered_sink() {
-  RecordingSink sink;
-  Log::begin(fakeNow);
-  TEST_ASSERT_TRUE(Log::addSink(&sink));
-
-  fakeNowMs = 42300;
-  Log::info("http", "GET %s", "/api/config");
-
-  TEST_ASSERT_EQUAL_UINT(1u, sink.calls);
-  TEST_ASSERT_TRUE(sink.lastLevel == LogLevel::Info);
-  TEST_ASSERT_EQUAL_UINT32(42300u, sink.lastUptimeMs);
-  TEST_ASSERT_EQUAL_STRING("http", sink.lastTag);
-  TEST_ASSERT_EQUAL_STRING("GET /api/config", sink.lastMessage);
-}
-
-static void test_every_level_maps_through() {
-  RecordingSink sink;
-  Log::begin(fakeNow);
-  Log::addSink(&sink);
-
-  Log::debug("t", "d");
-  TEST_ASSERT_TRUE(sink.lastLevel == LogLevel::Debug);
-  Log::info("t", "i");
-  TEST_ASSERT_TRUE(sink.lastLevel == LogLevel::Info);
-  Log::warn("t", "w");
-  TEST_ASSERT_TRUE(sink.lastLevel == LogLevel::Warn);
-  Log::error("t", "e");
-  TEST_ASSERT_TRUE(sink.lastLevel == LogLevel::Error);
-  TEST_ASSERT_EQUAL_UINT(4u, sink.calls);
-}
-
-static void test_message_reaches_every_sink() {
-  RecordingSink a;
-  RecordingSink b;
-  Log::begin(fakeNow);
-  Log::addSink(&a);
-  Log::addSink(&b);
-
-  Log::warn("ap", "client gone");
-
-  TEST_ASSERT_EQUAL_UINT(1u, a.calls);
-  TEST_ASSERT_EQUAL_UINT(1u, b.calls);
-  TEST_ASSERT_EQUAL_STRING("client gone", b.lastMessage);
-}
-
-static void test_logging_with_no_sinks_is_a_no_op() {
-  Log::begin(fakeNow);
-  Log::info("t", "nobody listening");  // must not crash
-  TEST_ASSERT_TRUE(true);
-}
-
-static void test_uptime_is_zero_when_no_clock_was_given() {
-  RecordingSink sink;
-  Log::addSink(&sink);  // note: no Log::begin()
-  Log::info("t", "x");
-  TEST_ASSERT_EQUAL_UINT32(0u, sink.lastUptimeMs);
-}
-
-static void test_sink_registration_is_capped() {
-  RecordingSink sinks[Log::kMaxSinks + 1];
-  for (size_t i = 0; i < Log::kMaxSinks; ++i) {
-    TEST_ASSERT_TRUE(Log::addSink(&sinks[i]));
-  }
-  TEST_ASSERT_FALSE(Log::addSink(&sinks[Log::kMaxSinks]));
-}
-
-static void test_null_sink_is_rejected() {
-  TEST_ASSERT_FALSE(Log::addSink(nullptr));
-}
-
-static void test_long_message_is_truncated_not_overflowed() {
-  RecordingSink sink;
-  Log::begin(fakeNow);
-  Log::addSink(&sink);
-
-  char huge[Log::kMaxMessageBytes * 2];
-  memset(huge, 'y', sizeof(huge) - 1);
-  huge[sizeof(huge) - 1] = '\0';
-
-  Log::info("t", "%s", huge);
-  TEST_ASSERT_EQUAL_UINT((unsigned)(Log::kMaxMessageBytes - 1),
-                         (unsigned)strlen(sink.lastMessage));
-}
-
-int main(int, char**) {
-  UNITY_BEGIN();
-  RUN_TEST(test_message_reaches_a_registered_sink);
-  RUN_TEST(test_every_level_maps_through);
-  RUN_TEST(test_message_reaches_every_sink);
-  RUN_TEST(test_logging_with_no_sinks_is_a_no_op);
-  RUN_TEST(test_uptime_is_zero_when_no_clock_was_given);
-  RUN_TEST(test_sink_registration_is_capped);
-  RUN_TEST(test_null_sink_is_rejected);
-  RUN_TEST(test_long_message_is_truncated_not_overflowed);
-  return UNITY_END();
-}
-```
-
-- [ ] **Step 2: Run the test to verify it fails**
-
-```bash
-pio test -e native -f native/test_log
-```
-
-Expected: FAIL — `fatal error: core/Log.h: No such file or directory`.
-
-- [ ] **Step 3: Write `src/core/LogSink.h`**
-
-```cpp
-#pragma once
-
-#include <stdint.h>
-
-#include "core/LogLevel.h"
-
-// A destination for log records.
-//
-// Implementations may be invoked from any task — loop() and the AsyncTCP task
-// both log — so write() must be quick, must not block, and must not touch
-// shared hardware directly. Display satisfies this by only buffering here and
-// drawing later from loop().
-class LogSink {
- public:
-  virtual ~LogSink() = default;
-
-  virtual void write(LogLevel level, uint32_t uptimeMs, const char* tag,
-                     const char* message) = 0;
-};
-```
-
-- [ ] **Step 4: Write `src/core/Log.h`**
+- [ ] **Step 1: Write `src/core/Log.h`**
 
 ```cpp
 #pragma once
@@ -1867,84 +1692,73 @@ class LogSink {
 #include <stdint.h>
 
 #include "core/LogLevel.h"
-#include "core/LogSink.h"
+#include "core/LogRing.h"
 
-// Fan-out logger. Formats a record once and hands it to every registered sink.
-// Knows nothing about serial, TFT or HTTP.
+// Logging for the whole firmware. Formats a line once, prints it to serial,
+// and appends it to the on-screen console.
+//
+// Callable from any task: HTTP handlers run on the AsyncTCP task, everything
+// else on loop().
 namespace Log {
 
-using NowFn = uint32_t (*)();
-
-inline constexpr size_t kMaxSinks = 4;
 inline constexpr size_t kMaxMessageBytes = 160;
 
-// Installs the millisecond clock. Without it, records carry an uptime of 0.
-void begin(NowFn now);
+void begin(unsigned long baud);
 
-// Registers a sink. Call only from setup(): the sink array is treated as
-// read-only afterwards, which is why the log path needs no lock.
-bool addSink(LogSink* sink);
-
-// Drops every sink and the clock. Exists for tests.
-void reset();
-
-void debug(const char* tag, const char* fmt, ...) __attribute__((format(printf, 2, 3)));
 void info(const char* tag, const char* fmt, ...) __attribute__((format(printf, 2, 3)));
 void warn(const char* tag, const char* fmt, ...) __attribute__((format(printf, 2, 3)));
 void error(const char* tag, const char* fmt, ...) __attribute__((format(printf, 2, 3)));
 
+// Copies the console into `dest` under the lock. Call from loop() only.
+void snapshot(LogRing& dest);
+
+// Bumped on every line. Display redraws when it differs from what it drew.
+uint32_t revision();
+
 }  // namespace Log
 ```
 
-- [ ] **Step 5: Write `src/core/Log.cpp`**
+- [ ] **Step 2: Write `src/core/Log.cpp`**
 
 ```cpp
 #include "core/Log.h"
 
+#include <Arduino.h>
 #include <stdarg.h>
 #include <stdio.h>
+
+#include "core/Format.h"
 
 namespace Log {
 namespace {
 
-LogSink* g_sinks[kMaxSinks] = {};
-size_t g_sinkCount = 0;
-NowFn g_now = nullptr;
+LogRing g_ring;
+SemaphoreHandle_t g_mutex = nullptr;
 
 void emit(LogLevel level, const char* tag, const char* fmt, va_list args) {
-  // Stack-local: concurrent callers never share this buffer, so no lock is
-  // needed even though loop() and the AsyncTCP task both land here.
+  // Stack-local: concurrent callers never share these buffers, so the only
+  // thing needing a lock is the ring append below.
   char message[kMaxMessageBytes];
-  vsnprintf(message, sizeof(message), fmt != nullptr ? fmt : "", args);
+  vsnprintf(message, sizeof(message), fmt, args);
 
-  const uint32_t uptimeMs = (g_now != nullptr) ? g_now() : 0u;
-  for (size_t i = 0; i < g_sinkCount; ++i) {
-    g_sinks[i]->write(level, uptimeMs, tag, message);
+  // Wider than the screen on purpose: serial gets the full line, and
+  // LogRing::append truncates its own copy to the console width.
+  char line[240];
+  Format::logLine(millis(), level, tag, message, line, sizeof(line));
+
+  Serial.println(line);
+
+  if (g_mutex != nullptr && xSemaphoreTake(g_mutex, portMAX_DELAY) == pdTRUE) {
+    g_ring.append(line);
+    xSemaphoreGive(g_mutex);
   }
 }
 
 }  // namespace
 
-void begin(NowFn now) { g_now = now; }
-
-bool addSink(LogSink* sink) {
-  if (sink == nullptr || g_sinkCount >= kMaxSinks) {
-    return false;
-  }
-  g_sinks[g_sinkCount++] = sink;
-  return true;
-}
-
-void reset() {
-  g_sinkCount = 0;
-  g_now = nullptr;
-}
-
-void debug(const char* tag, const char* fmt, ...) {
-  va_list args;
-  va_start(args, fmt);
-  emit(LogLevel::Debug, tag, fmt, args);
-  va_end(args);
+void begin(unsigned long baud) {
+  g_mutex = xSemaphoreCreateMutex();
+  Serial.begin(baud);
 }
 
 void info(const char* tag, const char* fmt, ...) {
@@ -1968,96 +1782,42 @@ void error(const char* tag, const char* fmt, ...) {
   va_end(args);
 }
 
+void snapshot(LogRing& dest) {
+  if (g_mutex != nullptr && xSemaphoreTake(g_mutex, portMAX_DELAY) == pdTRUE) {
+    dest = g_ring;
+    xSemaphoreGive(g_mutex);
+  }
+}
+
+// A 32-bit aligned read is atomic on this core, so this needs no lock. A caller
+// racing an append just redraws on the next frame.
+uint32_t revision() { return g_ring.revision(); }
+
 }  // namespace Log
 ```
 
-- [ ] **Step 6: Write `src/core/SerialSink.h`**
-
-Device-only — it includes `Arduino.h`, so it is never added to the native
-`build_src_filter`.
-
-```cpp
-#pragma once
-
-#include "core/LogSink.h"
-
-// LogSink writing to USB CDC serial. Prints absolute uptime (HH:MM:SS) and does
-// not truncate — the terminal has more room than the TFT.
-class SerialSink : public LogSink {
- public:
-  void begin(unsigned long baud);
-
-  void write(LogLevel level, uint32_t uptimeMs, const char* tag,
-             const char* message) override;
-
- private:
-  bool ready_ = false;
-};
-```
-
-- [ ] **Step 7: Write `src/core/SerialSink.cpp`**
-
-```cpp
-#include "core/SerialSink.h"
-
-#include <Arduino.h>
-
-#include "core/Format.h"
-
-void SerialSink::begin(unsigned long baud) {
-  Serial.begin(baud);
-  ready_ = true;
-}
-
-void SerialSink::write(LogLevel level, uint32_t uptimeMs, const char* tag,
-                       const char* message) {
-  if (!ready_) {
-    return;
-  }
-  char stamp[9];
-  Format::uptimeLong(uptimeMs, stamp, sizeof(stamp));
-  Serial.printf("%s [%s] %s: %s\n", stamp, logLevelName(level),
-                tag != nullptr ? tag : "?", message != nullptr ? message : "");
-}
-```
-
-- [ ] **Step 8: Add `Log.cpp` to the host build**
-
-`SerialSink.cpp` is deliberately absent — it needs Arduino.
-
-```ini
-build_src_filter =
-    -<*>
-    +<core/Format.cpp>
-    +<core/Log.cpp>
-    +<config/Settings.cpp>
-    +<config/internal/MemoryStore.cpp>
-    +<config/internal/ConfigApi.cpp>
-    +<ui/LogRing.cpp>
-```
-
-- [ ] **Step 9: Run the test to verify it passes**
+- [ ] **Step 3: Verify it compiles**
 
 ```bash
-pio test -e native -f native/test_log
+pio run -e esp
 ```
 
-Expected: PASS — `8 Tests 0 Failures 0 Ignored`.
+Expected: `SUCCESS`.
 
-- [ ] **Step 10: Run the whole host suite**
+- [ ] **Step 4: Confirm the host suite is unaffected**
 
 ```bash
 pio test -e native
 ```
 
-Expected: all five suites pass — `test_config_api`, `test_format`, `test_log`,
-`test_log_ring`, `test_memory_store`.
+Expected: still passing, with no new suite. `core/Log.cpp` must not have leaked into
+`build_src_filter`.
 
-- [ ] **Step 11: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add platformio.ini src/core/LogSink.h src/core/Log.h src/core/Log.cpp src/core/SerialSink.h src/core/SerialSink.cpp test/native/test_log/test_log.cpp
-git commit -m "Add fan-out logger and serial sink"
+git add src/core/Log.h src/core/Log.cpp
+git commit -m "Add serial and on-screen logging"
 ```
 
 ---
@@ -2625,7 +2385,7 @@ build_src_filter =
     +<config/internal/MemoryStore.cpp>
     +<config/internal/ConfigApi.cpp>
     +<config/internal/ConfigService.cpp>
-    +<ui/LogRing.cpp>
+    +<core/LogRing.cpp>
 ```
 
 - [ ] **Step 7: Run the test to verify it passes**
@@ -2661,7 +2421,7 @@ There is no web UI yet — every URL redirects.
 - Test: `test/native/test_config_api/test_config_api.cpp` (add two cases)
 
 **Interfaces:**
-- Consumes: `Settings`, `SettingsStore`, `NvsStore`, `Log`, `SerialSink`.
+- Consumes: `Settings`, `SettingsStore`, `NvsStore`, `Log`.
 - Produces:
   - `struct DeviceStatus { char ssid[33]; char ip[16]; uint8_t clients; uint32_t uptimeMs; uint32_t freeHeap; bool apUp; bool persistDegraded; }`
   - `class ApManager` — `bool begin(const char* ssid, uint8_t channel, uint8_t maxClients)`, `void tick(uint32_t nowMs)`, `bool up() const`, `uint8_t clients() const`, `const char* ssid() const`, `const char* ip() const`
@@ -3074,27 +2834,21 @@ DeviceStatus ConfigPortal::status() const {
 #include "config/ConfigPortal.h"
 #include "config/Settings.h"
 #include "core/Log.h"
-#include "core/SerialSink.h"
 
 namespace {
 
 // The one global. Everything else is reached through it by reference.
 struct App {
   Settings settings = Settings::defaults();
-  SerialSink serial;
   ConfigPortal portal{settings};
 };
 
 App app;
 
-uint32_t nowMs() { return millis(); }
-
 }  // namespace
 
 void setup() {
-  app.serial.begin(115200);
-  Log::begin(nowMs);
-  Log::addSink(&app.serial);
+  Log::begin(115200);
   Log::info("boot", "teletrack phase 1");
 
   if (!app.portal.begin()) {
@@ -3702,9 +3456,9 @@ git commit -m "Serve embedded web UI and settings API from the captive portal"
 - Modify: `src/main.cpp`
 
 **Interfaces:**
-- Consumes: `LogSink`, `LogRing`, `Format`, `DeviceStatus`.
+- Consumes: `Log`, `LogRing`, `Format`, `DeviceStatus`.
 - Produces:
-  - `class Display : public LogSink` — `bool begin()`, `void write(...) override`, `void tick(uint32_t nowMs, const DeviceStatus&)`
+  - `class Display` — `bool begin()`, `void tick(uint32_t nowMs, const DeviceStatus&)`
   - constants `kMinRedrawIntervalMs == 100`, `kHeaderHeight == 40`, `kLogLinePitch == 10`, `kRotation == 1`
 
 **Geometry:** rotation 1 gives 320×240. The header takes the top 40 px in font 2. The log
@@ -3712,9 +3466,9 @@ uses the GLCD font (font 1, 6×8 px, monospace) at a 10 px pitch — 20 rows fro
 y=240, and 53 columns from x=2 to x=320. Those two numbers are `LogRing::kRows` and
 `LogRing::kCols`; changing the geometry means changing them together.
 
-**Locking:** a FreeRTOS mutex, not a `portMUX` spinlock. Both sides run in task context —
-`write()` from AsyncTCP, `tick()` from `loop()` — and the snapshot copies about a
-kilobyte, which is far too long to hold interrupts off.
+**Locking:** `Display` holds no lock of its own. `Log` owns the console ring and its
+mutex; `Display::tick()` calls `Log::snapshot()` to copy the ring into its own `LogRing`
+and then draws from that copy, so the lock is never held while SPI is busy.
 
 - [ ] **Step 1: Write `src/ui/Display.h`**
 
@@ -3722,19 +3476,14 @@ kilobyte, which is far too long to hold interrupts off.
 #pragma once
 
 #include <TFT_eSPI.h>
-#include <freertos/FreeRTOS.h>
-#include <freertos/semphr.h>
 
 #include "core/DeviceStatus.h"
-#include "core/LogSink.h"
-#include "ui/LogRing.h"
+#include "core/LogRing.h"
 
-// The only thing in the firmware that touches the TFT.
-//
-// write() is a LogSink method and may be called from any task, so it buffers
-// and returns. tick() is called from loop() and is the sole place that drives
-// SPI. That split is what keeps the AsyncTCP task from racing the display.
-class Display : public LogSink {
+// The only thing in the firmware that touches the TFT. tick() is called from
+// loop() and is the sole place that drives SPI, which is what keeps the
+// AsyncTCP task from racing the display.
+class Display {
  public:
   static constexpr uint32_t kMinRedrawIntervalMs = 100;  // 10 Hz ceiling
   static constexpr int16_t kHeaderHeight = 40;
@@ -3742,11 +3491,6 @@ class Display : public LogSink {
   static constexpr uint8_t kRotation = 1;  // landscape, 320x240
 
   bool begin();
-
-  // Buffers a line. Never draws. Debug records are dropped so the screen stays
-  // readable; they still reach the serial sink.
-  void write(LogLevel level, uint32_t uptimeMs, const char* tag,
-             const char* message) override;
 
   // Call from loop() only.
   void tick(uint32_t nowMs, const DeviceStatus& status);
@@ -3756,8 +3500,7 @@ class Display : public LogSink {
   void drawLog();
 
   TFT_eSPI tft_;
-  LogRing ring_;
-  SemaphoreHandle_t mutex_ = nullptr;
+  LogRing console_;  // this frame's copy, refreshed from Log::snapshot()
   bool ready_ = false;
   uint32_t lastDrawMs_ = 0;
   uint32_t drawnRevision_ = 0;
@@ -3776,6 +3519,7 @@ class Display : public LogSink {
 #include <string.h>
 
 #include "core/Format.h"
+#include "core/Log.h"
 
 namespace {
 
@@ -3792,11 +3536,6 @@ bool headerDiffers(const DeviceStatus& a, const DeviceStatus& b) {
 }  // namespace
 
 bool Display::begin() {
-  mutex_ = xSemaphoreCreateMutex();
-  if (mutex_ == nullptr) {
-    return false;
-  }
-
   tft_.init();
   tft_.setRotation(kRotation);
   tft_.fillScreen(TFT_BLACK);
@@ -3806,26 +3545,6 @@ bool Display::begin() {
 
   ready_ = true;
   return true;
-}
-
-void Display::write(LogLevel level, uint32_t uptimeMs, const char* tag,
-                    const char* message) {
-  if (level == LogLevel::Debug) {
-    return;
-  }
-
-  // Formatting happens outside the lock: only the append needs protecting.
-  char line[LogRing::kLineSize];
-  Format::logLine(uptimeMs, level, tag, message, line, sizeof(line));
-
-  if (mutex_ == nullptr) {
-    ring_.append(line);  // pre-begin(), still single-threaded
-    return;
-  }
-  if (xSemaphoreTake(mutex_, portMAX_DELAY) == pdTRUE) {
-    ring_.append(line);
-    xSemaphoreGive(mutex_);
-  }
 }
 
 void Display::tick(uint32_t nowMs, const DeviceStatus& status) {
@@ -3843,12 +3562,9 @@ void Display::tick(uint32_t nowMs, const DeviceStatus& status) {
     headerDrawn_ = true;
   }
 
-  uint32_t revision = drawnRevision_;
-  if (xSemaphoreTake(mutex_, 0) == pdTRUE) {
-    revision = ring_.revision();
-    xSemaphoreGive(mutex_);
-  }
+  const uint32_t revision = Log::revision();
   if (revision != drawnRevision_) {
+    Log::snapshot(console_);
     drawLog();
     drawnRevision_ = revision;
   }
@@ -3881,17 +3597,8 @@ void Display::drawHeader(const DeviceStatus& status) {
 }
 
 void Display::drawLog() {
-  // Copy under the lock, draw with it released. Drawing takes ~20 ms and must
-  // never block a logging task for that long.
-  char snapshot[LogRing::kRows][LogRing::kLineSize];
-  if (xSemaphoreTake(mutex_, portMAX_DELAY) != pdTRUE) {
-    return;
-  }
-  for (size_t i = 0; i < LogRing::kRows; ++i) {
-    snprintf(snapshot[i], LogRing::kLineSize, "%s", ring_.row(i));
-  }
-  xSemaphoreGive(mutex_);
-
+  // console_ is this frame's private copy, taken by tick(). Drawing takes
+  // ~20 ms and must never block a logging task for that long.
   tft_.setTextFont(1);  // GLCD 6x8, monospace
   tft_.setTextSize(1);
   tft_.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
@@ -3903,7 +3610,7 @@ void Display::drawLog() {
     // so no flicker.
     char padded[LogRing::kLineSize];
     snprintf(padded, sizeof(padded), "%-*s", static_cast<int>(LogRing::kCols),
-             snapshot[i]);
+             console_.row(i));
     tft_.drawString(padded, 2, kHeaderHeight + static_cast<int16_t>(i) * kLogLinePitch);
   }
 }
@@ -3911,8 +3618,9 @@ void Display::drawLog() {
 
 - [ ] **Step 3: Wire `Display` into `src/main.cpp`**
 
-The display is brought up **before** the log sinks are registered, so the very first boot
-line lands on screen as well as on serial.
+`Log::begin()` comes first so the display-init failure has somewhere to go; every line
+logged after it lands on both serial and the console ring, and the first `tick()` draws
+whatever accumulated.
 
 ```cpp
 #ifndef PIO_UNIT_TESTING
@@ -3922,7 +3630,6 @@ line lands on screen as well as on serial.
 #include "config/ConfigPortal.h"
 #include "config/Settings.h"
 #include "core/Log.h"
-#include "core/SerialSink.h"
 #include "ui/Display.h"
 
 namespace {
@@ -3930,31 +3637,21 @@ namespace {
 // The one global. Everything else is reached through it by reference.
 struct App {
   Settings settings = Settings::defaults();
-  SerialSink serial;
   Display display;
   ConfigPortal portal{settings};
 };
 
 App app;
 
-uint32_t nowMs() { return millis(); }
-
 }  // namespace
 
 void setup() {
-  app.serial.begin(115200);
-  const bool haveScreen = app.display.begin();
-
-  Log::begin(nowMs);
-  Log::addSink(&app.serial);
-  if (haveScreen) {
-    Log::addSink(&app.display);
+  Log::begin(115200);
+  if (!app.display.begin()) {
+    Log::error("tft", "display init failed, serial only");
   }
 
   Log::info("boot", "teletrack phase 1");
-  if (!haveScreen) {
-    Log::error("tft", "display init failed, serial only");
-  }
 
   if (!app.portal.begin()) {
     Log::error("boot", "config portal failed to start");
@@ -4020,7 +3717,7 @@ pio test -e native
 ```
 
 Expected: six suites pass — `test_config_api`, `test_config_service`, `test_format`,
-`test_log`, `test_log_ring`, `test_memory_store`.
+`test_log_ring`, `test_memory_store`, `test_settings`.
 
 - [ ] **Step 2: Run the on-device suite**
 
@@ -4146,8 +3843,8 @@ git commit -m "Document Phase 1 build, usage and module layout"
 
 ## Simplification pass (2026-09-06)
 
-This is a proof of concept, not a shipping product. After Task 4 the following were
-cut from the remaining tasks as unearned abstraction:
+This is a proof of concept, not a shipping product. The following were cut as unearned
+abstraction, in two rounds after Task 4:
 
 - **`StatusProvider`** — a pure-virtual interface with exactly one implementation
   (`ConfigPortal`) and exactly one consumer (`WebUi`). `WebUi` now holds
@@ -4158,6 +3855,18 @@ cut from the remaining tasks as unearned abstraction:
 - **The no-heap-allocation constraint** — ArduinoJson 7 removed `StaticJsonDocument`,
   and writing a custom pool allocator to route around that costs far more complexity
   than the fragmentation it avoids on a device serving a config page.
+- **`LogSink` and `SerialSink`** — an interface and an implementation to fan a log line
+  out to two destinations that are both known at compile time. `Log` now writes to
+  serial and to the console ring directly, and owns the ring's mutex. Three files became
+  one, and `Display` stopped being a log sink that also draws.
+- **`Format::uptimeShort` and deciseconds** — two time formats where one does. Log lines
+  now carry `HH:MM:SS`, the same stamp as the header, which also removes the
+  wraps-at-100-minutes wart the short form had.
+- **`LogLevel::Debug`** — nothing in the firmware logs at debug level.
+- **Defensive guards for callers that do not exist** — null and buffer-size checks in
+  `Format`, buffer-too-small returns in `ConfigApi`, the dedup scan in
+  `ValidationResult::add`. The rule kept instead: validate untrusted network input,
+  trust our own callers.
 
 Deliberately kept, and why:
 
@@ -4165,6 +3874,6 @@ Deliberately kept, and why:
   without this seam the save/rollback/degraded paths have no host tests at all.
 - **`ConfigService`** — holds the save semantics (validate, persist, roll back,
   choose a status code). Inside `WebUi` none of it would be testable.
-- **`LogSink`** — keeps `Log` free of any TFT knowledge. It is 15 lines.
-- **`Display`'s mutex and snapshot** — the AsyncTCP task and `loop()` genuinely race
-  on the log buffer. This is correctness, not gilding.
+- **The console lock** — the AsyncTCP task and `loop()` genuinely race on the log
+  buffer. It now lives in `Log` beside the ring it protects, and `Display` draws from a
+  private copy. This is correctness, not gilding.

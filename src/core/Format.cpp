@@ -4,14 +4,7 @@
 
 namespace Format {
 
-void uptimeShort(uint32_t ms, char* out, size_t outSize) {
-  const unsigned deci = static_cast<unsigned>((ms / 100u) % 10u);
-  const unsigned secs = static_cast<unsigned>((ms / 1000u) % 60u);
-  const unsigned mins = static_cast<unsigned>((ms / 60000u) % 100u);
-  snprintf(out, outSize, "%02u:%02u.%u", mins, secs, deci);
-}
-
-void uptimeLong(uint32_t ms, char* out, size_t outSize) {
+void uptime(uint32_t ms, char* out, size_t outSize) {
   const uint32_t total = ms / 1000u;
   unsigned hours = static_cast<unsigned>(total / 3600u);
   unsigned mins = static_cast<unsigned>((total / 60u) % 60u);
@@ -29,7 +22,7 @@ void uptimeLong(uint32_t ms, char* out, size_t outSize) {
 void logLine(uint32_t ms, LogLevel level, const char* tag, const char* msg,
              char* out, size_t outSize) {
   char stamp[9];
-  uptimeShort(ms, stamp, sizeof(stamp));
+  uptime(ms, stamp, sizeof(stamp));
 
   const int written = snprintf(out, outSize, "%s [%s] %s: %s", stamp,
                                logLevelName(level), tag, msg);
