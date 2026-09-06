@@ -9,9 +9,7 @@ class MemoryStore : public SettingsStore {
  public:
   bool load(Settings& out) override;
   bool save(const Settings& s) override;
-  bool available() const override;
 
-  void setAvailable(bool value);
   void failNextSave();
   bool hasStored() const;
   const Settings& stored() const;
@@ -19,6 +17,5 @@ class MemoryStore : public SettingsStore {
  private:
   Settings stored_ = Settings::defaults();
   bool hasStored_ = false;
-  bool available_ = true;
   bool failNextSave_ = false;
 };

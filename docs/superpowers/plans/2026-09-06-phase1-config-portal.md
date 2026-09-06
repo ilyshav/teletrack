@@ -29,7 +29,7 @@
   the module and may.
 - Only `Display::tick()` draws to the TFT, and only from `loop()`. No other code path
   touches SPI. This is the rule that prevents the AsyncTCP task from racing `loop()`.
-- Settings field names on the wire are exactly `schemaVersion`, `deviceName`, `sampleHz`.
+- Settings field names on the wire are exactly `deviceName` and `sampleHz`.
 - Validation messages are exactly `"1-31 characters, letters digits _ - only"` and
   `"must be 1, 5, 10 or 25"`. Storage failure message is exactly `"could not write to storage"`.
 - Commit after every task. Never commit `src/config/internal/ui_index.h` — it is generated.
@@ -442,7 +442,7 @@ The public data type of the config module. Pure — no NVS, no JSON, no HTTP.
 **Interfaces:**
 - Consumes: nothing.
 - Produces:
-  - `struct Settings { uint8_t schemaVersion; char deviceName[32]; uint8_t sampleHz; }`
+  - `struct Settings { char deviceName[32]; uint8_t sampleHz; }`
   - `static Settings Settings::defaults()`
   - `ValidationResult Settings::validate() const`
   - `struct ValidationResult` with `count`, `errors[4]` of `{const char* field; const char* message;}`,
@@ -472,7 +472,6 @@ static Settings withName(const char* name) {
 
 static void test_defaults() {
   const Settings s = Settings::defaults();
-  TEST_ASSERT_EQUAL_UINT8(1, s.schemaVersion);
   TEST_ASSERT_EQUAL_STRING("teletrack", s.deviceName);
   TEST_ASSERT_EQUAL_UINT8(10, s.sampleHz);
   TEST_ASSERT_TRUE(s.validate().ok());
@@ -615,10 +614,8 @@ struct ValidationResult {
 };
 
 struct Settings {
-  static constexpr uint8_t kSchemaVersion = 1;
   static constexpr size_t kDeviceNameSize = 32;  // 31 usable characters + NUL
 
-  uint8_t schemaVersion = kSchemaVersion;
   char deviceName[kDeviceNameSize] = {};
   uint8_t sampleHz = 10;
 
@@ -665,7 +662,6 @@ const char* ValidationResult::messageFor(const char* field) const {
 
 Settings Settings::defaults() {
   Settings s;
-  s.schemaVersion = kSchemaVersion;
   memset(s.deviceName, 0, sizeof(s.deviceName));
   snprintf(s.deviceName, sizeof(s.deviceName), "%s", "teletrack");
   s.sampleHz = 10;
@@ -747,8 +743,8 @@ The seam that lets everything above it be tested without NVS.
 **Interfaces:**
 - Consumes: `Settings` from Task 2.
 - Produces:
-  - `class SettingsStore` — `virtual bool load(Settings&)`, `virtual bool save(const Settings&)`, `virtual bool available() const`
-  - `class MemoryStore : public SettingsStore` — plus `setAvailable(bool)`, `failNextSave()`, `hasStored() const`, `stored() const`
+  - `class SettingsStore` — `virtual bool load(Settings&)`, `virtual bool save(const Settings&)`
+  - `class MemoryStore : public SettingsStore` — plus `failNextSave()`, `hasStored() const`, `stored() const`
 
 - [ ] **Step 1: Write the failing test**
 
@@ -785,7 +781,6 @@ static void test_save_then_load_round_trips() {
   TEST_ASSERT_TRUE(store.load(out));
   TEST_ASSERT_EQUAL_UINT8(25, out.sampleHz);
   TEST_ASSERT_EQUAL_STRING("bike-one", out.deviceName);
-  TEST_ASSERT_EQUAL_UINT8(Settings::kSchemaVersion, out.schemaVersion);
 }
 
 static void test_fail_next_save_fails_once_and_stores_nothing() {
@@ -799,16 +794,6 @@ static void test_fail_next_save_fails_once_and_stores_nothing() {
 
   TEST_ASSERT_TRUE(store.save(in));  // the next one succeeds
   TEST_ASSERT_TRUE(store.hasStored());
-}
-
-static void test_unavailable_store_refuses_both_operations() {
-  MemoryStore store;
-  store.setAvailable(false);
-
-  Settings s = Settings::defaults();
-  TEST_ASSERT_FALSE(store.available());
-  TEST_ASSERT_FALSE(store.save(s));
-  TEST_ASSERT_FALSE(store.load(s));
 }
 
 static void test_usable_through_the_base_interface() {
@@ -829,7 +814,6 @@ int main(int, char**) {
   RUN_TEST(test_load_on_empty_store_returns_false_and_leaves_out_untouched);
   RUN_TEST(test_save_then_load_round_trips);
   RUN_TEST(test_fail_next_save_fails_once_and_stores_nothing);
-  RUN_TEST(test_unavailable_store_refuses_both_operations);
   RUN_TEST(test_usable_through_the_base_interface);
   return UNITY_END();
 }
@@ -863,10 +847,6 @@ class SettingsStore {
 
   // Persists `s`. Returns false when the write failed.
   virtual bool save(const Settings& s) = 0;
-
-  // False when the backing store is unusable. The device still runs, from RAM
-  // defaults, and reports persistDegraded to the client.
-  virtual bool available() const = 0;
 };
 ```
 
@@ -884,9 +864,7 @@ class MemoryStore : public SettingsStore {
  public:
   bool load(Settings& out) override;
   bool save(const Settings& s) override;
-  bool available() const override;
 
-  void setAvailable(bool value);
   void failNextSave();
   bool hasStored() const;
   const Settings& stored() const;
@@ -894,7 +872,6 @@ class MemoryStore : public SettingsStore {
  private:
   Settings stored_ = Settings::defaults();
   bool hasStored_ = false;
-  bool available_ = true;
   bool failNextSave_ = false;
 };
 ```
@@ -905,7 +882,7 @@ class MemoryStore : public SettingsStore {
 #include "config/internal/MemoryStore.h"
 
 bool MemoryStore::load(Settings& out) {
-  if (!available_ || !hasStored_) {
+  if (!hasStored_) {
     return false;
   }
   out = stored_;
@@ -913,9 +890,6 @@ bool MemoryStore::load(Settings& out) {
 }
 
 bool MemoryStore::save(const Settings& s) {
-  if (!available_) {
-    return false;
-  }
   if (failNextSave_) {
     failNextSave_ = false;
     return false;
@@ -924,10 +898,6 @@ bool MemoryStore::save(const Settings& s) {
   hasStored_ = true;
   return true;
 }
-
-bool MemoryStore::available() const { return available_; }
-
-void MemoryStore::setAvailable(bool value) { available_ = value; }
 
 void MemoryStore::failNextSave() { failNextSave_ = true; }
 
@@ -954,7 +924,7 @@ build_src_filter =
 pio test -e native -f native/test_memory_store
 ```
 
-Expected: PASS — `5 Tests 0 Failures 0 Ignored`.
+Expected: PASS — `4 Tests 0 Failures 0 Ignored`.
 
 - [ ] **Step 8: Commit**
 
@@ -1009,7 +979,7 @@ static void test_to_json_shape() {
   const size_t n = ConfigApi::toJson(Settings::defaults(), buf, sizeof(buf));
   TEST_ASSERT_TRUE(n > 0);
   TEST_ASSERT_EQUAL_STRING(
-      "{\"schemaVersion\":1,\"deviceName\":\"teletrack\",\"sampleHz\":10}", buf);
+      "{\"deviceName\":\"teletrack\",\"sampleHz\":10}", buf);
 }
 
 static void test_to_json_refuses_a_buffer_that_is_too_small() {
@@ -1058,15 +1028,6 @@ static void test_apply_partial_payload_leaves_other_fields_alone() {
   TEST_ASSERT_TRUE(r.status == ConfigApi::ParseStatus::Ok);
   TEST_ASSERT_EQUAL_UINT8(5, s.sampleHz);
   TEST_ASSERT_EQUAL_STRING("teletrack", s.deviceName);
-}
-
-static void test_apply_ignores_schema_version_from_the_client() {
-  Settings s = Settings::defaults();
-  const char* body = "{\"schemaVersion\":99,\"sampleHz\":5}";
-  const ConfigApi::ParseResult r = ConfigApi::applyJson(body, strlen(body), s);
-
-  TEST_ASSERT_TRUE(r.status == ConfigApi::ParseStatus::Ok);
-  TEST_ASSERT_EQUAL_UINT8(Settings::kSchemaVersion, s.schemaVersion);
 }
 
 static void test_apply_malformed_json_is_bad_json() {
@@ -1153,7 +1114,6 @@ int main(int, char**) {
   RUN_TEST(test_errors_json_shape);
   RUN_TEST(test_apply_valid_payload_updates_settings);
   RUN_TEST(test_apply_partial_payload_leaves_other_fields_alone);
-  RUN_TEST(test_apply_ignores_schema_version_from_the_client);
   RUN_TEST(test_apply_malformed_json_is_bad_json);
   RUN_TEST(test_apply_non_object_json_is_bad_json);
   RUN_TEST(test_apply_writes_nothing_when_any_field_is_invalid);
@@ -1208,7 +1168,7 @@ size_t toJson(const Settings& s, char* out, size_t outSize);
 
 // Applies the fields present in `body` on top of `inOut`. `inOut` is modified
 // only when the returned status is Ok — a payload with one bad field changes
-// nothing. `schemaVersion` in the body is ignored.
+// nothing.
 ParseResult applyJson(const char* body, size_t len, Settings& inOut);
 
 size_t okToJson(char* out, size_t outSize);
@@ -1241,7 +1201,6 @@ size_t serializeIfItFits(const JsonDocument& doc, char* out, size_t outSize) {
 
 size_t toJson(const Settings& s, char* out, size_t outSize) {
   JsonDocument doc;
-  doc["schemaVersion"] = s.schemaVersion;
   doc["deviceName"] = s.deviceName;
   doc["sampleHz"] = s.sampleHz;
   return serializeIfItFits(doc, out, outSize);
@@ -1293,7 +1252,6 @@ ParseResult applyJson(const char* body, size_t len, Settings& inOut) {
 
   // Build a candidate. inOut is only overwritten if everything checks out.
   Settings candidate = inOut;
-  candidate.schemaVersion = Settings::kSchemaVersion;  // never client-supplied
 
   ValidationResult typeErrors;
 
@@ -1361,7 +1319,7 @@ build_src_filter =
 pio test -e native -f native/test_config_api
 ```
 
-Expected: PASS — `15 Tests 0 Failures 0 Ignored`.
+Expected: PASS — `14 Tests 0 Failures 0 Ignored`.
 
 - [ ] **Step 7: Commit**
 
@@ -1886,14 +1844,12 @@ void tearDown() {}
 static void test_begin_succeeds() {
   NvsStore store;
   TEST_ASSERT_TRUE(store.begin());
-  TEST_ASSERT_TRUE(store.available());
   store.end();
 }
 
 static void test_operations_fail_before_begin() {
   NvsStore store;
   Settings s = Settings::defaults();
-  TEST_ASSERT_FALSE(store.available());
   TEST_ASSERT_FALSE(store.save(s));
   TEST_ASSERT_FALSE(store.load(s));
 }
@@ -1911,7 +1867,6 @@ static void test_save_then_load_round_trips() {
   TEST_ASSERT_TRUE(store.load(out));
   TEST_ASSERT_EQUAL_UINT8(25, out.sampleHz);
   TEST_ASSERT_EQUAL_STRING("nvs-round-trip", out.deviceName);
-  TEST_ASSERT_EQUAL_UINT8(Settings::kSchemaVersion, out.schemaVersion);
   store.end();
 }
 
@@ -1996,18 +1951,16 @@ Expected: FAIL — `fatal error: config/internal/NvsStore.h: No such file or dir
 class NvsStore : public SettingsStore {
  public:
   static constexpr const char* kNamespace = "teletrack";
-  static constexpr const char* kKeySchema = "schema";
   static constexpr const char* kKeyDeviceName = "name";
   static constexpr const char* kKeySampleHz = "hz";
 
   // Opens the namespace. Returns false when NVS is unusable — the caller then
-  // runs from RAM defaults and reports persistDegraded.
+  // runs from RAM defaults and says so in the log.
   bool begin();
   void end();
 
   bool load(Settings& out) override;
   bool save(const Settings& s) override;
-  bool available() const override;
 
  private:
   Preferences prefs_;
@@ -2032,8 +1985,6 @@ void NvsStore::end() {
   }
 }
 
-bool NvsStore::available() const { return available_; }
-
 bool NvsStore::load(Settings& out) {
   if (!available_) {
     return false;
@@ -2044,7 +1995,6 @@ bool NvsStore::load(Settings& out) {
   }
 
   Settings loaded = Settings::defaults();
-  loaded.schemaVersion = prefs_.getUChar(kKeySchema, Settings::kSchemaVersion);
   if (prefs_.isKey(kKeyDeviceName)) {
     prefs_.getString(kKeyDeviceName, loaded.deviceName, sizeof(loaded.deviceName));
   }
@@ -2062,9 +2012,6 @@ bool NvsStore::load(Settings& out) {
 
 bool NvsStore::save(const Settings& s) {
   if (!available_) {
-    return false;
-  }
-  if (prefs_.putUChar(kKeySchema, Settings::kSchemaVersion) == 0) {
     return false;
   }
   if (prefs_.putString(kKeyDeviceName, s.deviceName) == 0) {
@@ -2127,11 +2074,6 @@ least likely to be noticed by hand.
 text for a malformed or oversized body. This task fixes those strings as
 `"malformed JSON body"` and `"body exceeds 1024 bytes"`, both keyed under `"_"` the way
 the storage error is.
-
-**Degraded mode:** when `store.available()` is false, a save applies to RAM and returns
-`200`. Spec §12 says the device "stays fully usable; changes just don't survive reboot" —
-returning `500` there would contradict that. The client learns about it from
-`persistDegraded` in `/api/status`, not from a failed save.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2227,22 +2169,6 @@ static void test_storage_write_failure_returns_500_and_rolls_back() {
   TEST_ASSERT_EQUAL_UINT8(10, settings.sampleHz);
 }
 
-static void test_degraded_store_still_applies_to_ram_and_returns_200() {
-  Settings settings = Settings::defaults();
-  MemoryStore store;
-  store.setAvailable(false);
-  char body[ConfigApi::kJsonBufferSize];
-
-  const char* request = "{\"sampleHz\":5}";
-  const ConfigService::SaveOutcome out =
-      ConfigService::save(request, strlen(request), settings, store, body, sizeof(body));
-
-  TEST_ASSERT_EQUAL_UINT16(200, out.httpStatus);
-  TEST_ASSERT_EQUAL_STRING("{\"ok\":true}", body);
-  TEST_ASSERT_EQUAL_UINT8(5, settings.sampleHz);  // live now
-  TEST_ASSERT_FALSE(store.hasStored());           // but not persisted
-}
-
 static void test_body_length_matches_what_was_written() {
   Settings settings = Settings::defaults();
   MemoryStore store;
@@ -2262,7 +2188,6 @@ int main(int, char**) {
   RUN_TEST(test_malformed_json_returns_400);
   RUN_TEST(test_oversized_body_returns_413_without_parsing);
   RUN_TEST(test_storage_write_failure_returns_500_and_rolls_back);
-  RUN_TEST(test_degraded_store_still_applies_to_ram_and_returns_200);
   RUN_TEST(test_body_length_matches_what_was_written);
   return UNITY_END();
 }
@@ -2356,10 +2281,7 @@ SaveOutcome save(const char* requestBody, size_t len, Settings& settings,
     return outcome;
   }
 
-  // Degraded storage is not a client error: the change takes effect now and the
-  // client learns it will not survive a reboot from persistDegraded in
-  // /api/status. See spec §12.
-  if (store.available() && !store.save(settings)) {
+  if (!store.save(settings)) {
     settings = previous;
     SaveOutcome outcome;
     outcome.httpStatus = 500;
@@ -2396,7 +2318,7 @@ build_src_filter =
 pio test -e native -f native/test_config_service
 ```
 
-Expected: PASS — `7 Tests 0 Failures 0 Ignored`.
+Expected: PASS — `6 Tests 0 Failures 0 Ignored`.
 
 - [ ] **Step 8: Commit**
 
@@ -2425,7 +2347,7 @@ There is no web UI yet — every URL redirects.
 **Interfaces:**
 - Consumes: `Settings`, `SettingsStore`, `NvsStore`, `Log`.
 - Produces:
-  - `struct DeviceStatus { char ssid[33]; char ip[16]; uint8_t clients; uint32_t uptimeMs; uint32_t freeHeap; bool apUp; bool persistDegraded; }`
+  - `struct DeviceStatus { char ssid[33]; char ip[16]; uint8_t clients; uint32_t uptimeMs; uint32_t freeHeap; bool apUp; }`
   - `class ApManager` — `bool begin(const char* ssid, uint8_t channel, uint8_t maxClients)`, `void tick(uint32_t nowMs)`, `bool up() const`, `uint8_t clients() const`, `const char* ssid() const`, `const char* ip() const`
   - `class CaptivePortal` — `bool begin(const IPAddress&)`, `void tick()`, `void registerRoutes(AsyncWebServer&)`
   - `class ConfigPortal` — `explicit ConfigPortal(Settings&)`, `bool begin()`, `void tick(uint32_t nowMs)`, `DeviceStatus status() const`, constants `kSsid`, `kChannel`, `kMaxClients`, `kHttpPort`
@@ -2436,10 +2358,10 @@ the concrete store is constructed inside the facade rather than injected. Host t
 not construct a `ConfigPortal` at all — they test `ConfigService` against `MemoryStore`,
 which is where the store-dependent logic lives.
 
-- [ ] **Step 1: Add the failing `statusToJson` tests**
+- [ ] **Step 1: Add the failing `statusToJson` test**
 
-Append these two tests to `test/native/test_config_api/test_config_api.cpp`, and add
-their `RUN_TEST` lines to `main()`:
+Append this test to `test/native/test_config_api/test_config_api.cpp`, and add its
+`RUN_TEST` line to `main()`:
 
 ```cpp
 static void test_status_json_shape() {
@@ -2450,24 +2372,13 @@ static void test_status_json_shape() {
   status.uptimeMs = 134221;
   status.freeHeap = 186432;
   status.apUp = true;
-  status.persistDegraded = false;
 
   char buf[ConfigApi::kJsonBufferSize];
   ConfigApi::statusToJson(status, buf, sizeof(buf));
   TEST_ASSERT_EQUAL_STRING(
       "{\"ssid\":\"teletrack\",\"ip\":\"192.168.4.1\",\"clients\":1,"
-      "\"uptimeMs\":134221,\"freeHeap\":186432,\"apUp\":true,"
-      "\"persistDegraded\":false}",
+      "\"uptimeMs\":134221,\"freeHeap\":186432,\"apUp\":true}",
       buf);
-}
-
-static void test_status_json_reports_degraded_storage() {
-  DeviceStatus status;
-  status.persistDegraded = true;
-
-  char buf[ConfigApi::kJsonBufferSize];
-  ConfigApi::statusToJson(status, buf, sizeof(buf));
-  TEST_ASSERT_NOT_NULL(strstr(buf, "\"persistDegraded\":true"));
 }
 ```
 
@@ -2498,7 +2409,6 @@ struct DeviceStatus {
   uint32_t uptimeMs = 0;
   uint32_t freeHeap = 0;
   bool apUp = false;
-  bool persistDegraded = false;
 };
 ```
 
@@ -2525,7 +2435,6 @@ size_t statusToJson(const DeviceStatus& status, char* out, size_t outSize) {
   doc["uptimeMs"] = status.uptimeMs;
   doc["freeHeap"] = status.freeHeap;
   doc["apUp"] = status.apUp;
-  doc["persistDegraded"] = status.persistDegraded;
   return serializeIfItFits(doc, out, outSize);
 }
 ```
@@ -2536,7 +2445,7 @@ size_t statusToJson(const DeviceStatus& status, char* out, size_t outSize) {
 pio test -e native -f native/test_config_api
 ```
 
-Expected: PASS — `17 Tests 0 Failures 0 Ignored`.
+Expected: PASS — `15 Tests 0 Failures 0 Ignored`.
 
 - [ ] **Step 6: Write `src/config/internal/ApManager.h`**
 
@@ -2755,7 +2664,7 @@ class ConfigPortal {
 
   // Loads persisted settings, starts the AP, DNS and HTTP server. Returns false
   // only when the AP itself could not start — a storage failure is survivable
-  // and reported through status().persistDegraded.
+  // and is reported in the log.
   bool begin();
 
   // Call from loop().
@@ -2821,7 +2730,6 @@ DeviceStatus ConfigPortal::status() const {
   s.uptimeMs = millis();
   s.freeHeap = ESP.getFreeHeap();
   s.apUp = ap_.up();
-  s.persistDegraded = !store_.available();
   return s;
 }
 ```
@@ -3010,14 +2918,12 @@ no internet on the far side anyway.
 <style>
   :root {
     --bg: #f6f6f4; --fg: #16181d; --muted: #6b7280; --card: #ffffff;
-    --line: #e3e3e0; --accent: #1f6feb; --bad: #b42318; --warn: #7a5b00;
-    --warnbg: #fff6d6;
+    --line: #e3e3e0; --accent: #1f6feb; --bad: #b42318;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #14161a; --fg: #e8eaed; --muted: #9aa1ab; --card: #1c1f24;
-      --line: #2b2f36; --accent: #539bf5; --bad: #ff6b5e; --warn: #ffd579;
-      --warnbg: #3a2f10;
+      --line: #2b2f36; --accent: #539bf5; --bad: #ff6b5e;
     }
   }
   * { box-sizing: border-box; }
@@ -3048,20 +2954,12 @@ no internet on the far side anyway.
     color: #fff; background: var(--accent); border: 0; border-radius: 7px;
   }
   button:disabled { opacity: 0.55; }
-  #banner {
-    display: none; background: var(--warnbg); color: var(--warn);
-    border: 1px solid currentColor; border-radius: 8px; padding: 9px 11px;
-    font-size: 13px; margin-bottom: 14px;
-  }
   #toast { min-height: 18px; margin-top: 9px; font-size: 13px; text-align: center; }
 </style>
 
 <main>
   <h1>teletrack</h1>
   <p class="sub">Phase 1 &middot; device configuration</p>
-
-  <div id="banner">Storage is unavailable. Changes take effect now but will be
-    lost on reboot.</div>
 
   <div class="card">
     <div class="stat"><span>Network</span><span id="s-ssid">&mdash;</span></div>
@@ -3135,7 +3033,6 @@ no internet on the far side anyway.
         $('s-clients').textContent = st.clients;
         $('s-uptime').textContent = formatUptime(st.uptimeMs);
         $('s-heap').textContent = Math.round(st.freeHeap / 1024) + ' KB';
-        $('banner').style.display = st.persistDegraded ? 'block' : 'none';
       })
       .catch(function () { /* device rebooting or out of range; try again later */ });
   }
@@ -3417,10 +3314,10 @@ curl -s http://192.168.4.1/api/status
 Expected, in order:
 
 ```
-{"schemaVersion":1,"deviceName":"teletrack","sampleHz":10}
+{"deviceName":"teletrack","sampleHz":10}
 {"ok":true}
 {"ok":false,"errors":{"sampleHz":"must be 1, 5, 10 or 25"}}
-{"ssid":"teletrack","ip":"192.168.4.1","clients":1,"uptimeMs":...,"freeHeap":...,"apUp":true,"persistDegraded":false}
+{"ssid":"teletrack","ip":"192.168.4.1","clients":1,"uptimeMs":...,"freeHeap":...,"apUp":true}
 ```
 
 - [ ] **Step 8: Verify persistence**
@@ -3531,7 +3428,6 @@ namespace {
 bool headerDiffers(const DeviceStatus& a, const DeviceStatus& b) {
   return strcmp(a.ssid, b.ssid) != 0 || strcmp(a.ip, b.ip) != 0 ||
          a.clients != b.clients || a.apUp != b.apUp ||
-         a.persistDegraded != b.persistDegraded ||
          (a.uptimeMs / 1000u) != (b.uptimeMs / 1000u);
 }
 
@@ -3591,8 +3487,7 @@ void Display::drawHeader(const DeviceStatus& status) {
   char stamp[9];
   Format::uptimeLong(status.uptimeMs, stamp, sizeof(stamp));
   char lower[48];
-  snprintf(lower, sizeof(lower), "up %s%s", stamp,
-           status.persistDegraded ? "   NO STORAGE" : "");
+  snprintf(lower, sizeof(lower), "up %s", stamp);
   tft_.drawString(lower, tft_.width() - 4, 20);
 
   tft_.setTextDatum(TL_DATUM);
@@ -3892,6 +3787,16 @@ abstraction, in two rounds after Task 4:
   now carry `HH:MM:SS`, the same stamp as the header, which also removes the
   wraps-at-100-minutes wart the short form had.
 - **`LogLevel::Debug`** — nothing in the firmware logs at debug level.
+- **`schemaVersion`** — a schema-migration hook for a proof of concept whose two
+  settings are placeholders that will be replaced wholesale. Nothing ever read it to
+  migrate anything; it cost a struct field, an NVS key, a wire field, a
+  never-client-supplied rule in the parser, and three tests.
+- **Degraded-storage mode** — a whole reporting path for "NVS would not open": a
+  `persistDegraded` flag in `/api/status`, a banner in the web UI, a save branch that
+  applied to RAM and returned `200` anyway, and its test. NVS not opening on a working
+  board does not happen; if it does, one `ERR` line in the log is the honest answer.
+  Removing it also removed `SettingsStore::available()` and `MemoryStore::setAvailable()`,
+  taking the store interface from three methods to two.
 - **Defensive guards for callers that do not exist** — null and buffer-size checks in
   `Format`, buffer-too-small returns in `ConfigApi`, the dedup scan in
   `ValidationResult::add`. The rule kept instead: validate untrusted network input,

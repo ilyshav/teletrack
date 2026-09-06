@@ -16,7 +16,6 @@ static Settings withName(const char* name) {
 
 static void test_defaults() {
   const Settings s = Settings::defaults();
-  TEST_ASSERT_EQUAL_UINT8(1, s.schemaVersion);
   TEST_ASSERT_EQUAL_STRING("teletrack", s.deviceName);
   TEST_ASSERT_EQUAL_UINT8(10, s.sampleHz);
   TEST_ASSERT_TRUE(s.validate().ok());

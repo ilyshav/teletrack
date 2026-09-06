@@ -23,7 +23,6 @@ const char* ValidationResult::messageFor(const char* field) const {
 
 Settings Settings::defaults() {
   Settings s;
-  s.schemaVersion = kSchemaVersion;
   memset(s.deviceName, 0, sizeof(s.deviceName));
   snprintf(s.deviceName, sizeof(s.deviceName), "%s", "teletrack");
   s.sampleHz = 10;

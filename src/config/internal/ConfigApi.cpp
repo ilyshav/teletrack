@@ -8,7 +8,6 @@ namespace ConfigApi {
 
 size_t toJson(const Settings& s, char* out, size_t outSize) {
   JsonDocument doc;
-  doc["schemaVersion"] = s.schemaVersion;
   doc["deviceName"] = s.deviceName;
   doc["sampleHz"] = s.sampleHz;
   return serializeJson(doc, out, outSize);
@@ -53,7 +52,6 @@ ParseResult applyJson(const char* body, size_t len, Settings& inOut) {
 
   // Build a candidate. inOut is only overwritten if everything checks out.
   Settings candidate = inOut;
-  candidate.schemaVersion = Settings::kSchemaVersion;  // never client-supplied
 
   ValidationResult typeErrors;
 

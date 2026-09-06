@@ -31,10 +31,8 @@ struct ValidationResult {
 };
 
 struct Settings {
-  static constexpr uint8_t kSchemaVersion = 1;
   static constexpr size_t kDeviceNameSize = 32;  // 31 usable characters + NUL
 
-  uint8_t schemaVersion = kSchemaVersion;
   char deviceName[kDeviceNameSize] = {};
   uint8_t sampleHz = 10;
 

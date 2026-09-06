@@ -106,13 +106,11 @@ When a shell class grows logic worth testing, that logic moves into the pure hal
 
 | Field           | Type      | Default     | Valid                              |
 | --------------- | --------- | ----------- | ---------------------------------- |
-| `schemaVersion` | `uint8_t` | `1`         | written, never accepted from client |
 | `deviceName`    | `char[32]`| `teletrack` | 1–31 chars, `[A-Za-z0-9_-]` only   |
 | `sampleHz`      | `uint8_t` | `10`        | one of 1, 5, 10, 25                |
 
 Stored in NVS namespace `teletrack`, one key per field. A missing key yields the
-default. `schemaVersion` exists so a future field rename or semantic change can be
-migrated on load rather than silently misread.
+default.
 
 `Settings::validate()` returns a result carrying a per-field error message. It is a
 pure function over the struct — no NVS, no JSON, no HTTP.
@@ -139,7 +137,7 @@ Headers: `Content-Type: text/html`, `Content-Encoding: gzip`, `Cache-Control: no
 ### `GET /api/config`
 
 ```json
-{ "schemaVersion": 1, "deviceName": "teletrack", "sampleHz": 10 }
+{ "deviceName": "teletrack", "sampleHz": 10 }
 ```
 
 ### `POST /api/config`
@@ -179,8 +177,7 @@ Persistence failure — `500`, in-memory `Settings` rolled back to its prior val
   "ip": "192.168.4.1",
   "clients": 1,
   "uptimeMs": 134221,
-  "freeHeap": 186432,
-  "persistDegraded": false
+  "freeHeap": 186432
 }
 ```
 
@@ -322,7 +319,7 @@ Unused libraries currently in `lib_deps` (`LiquidCrystal`, `ArduinoHttpClient`,
 
 | Failure                        | Behavior                                                                                                       |
 | ------------------------------ | -------------------------------------------------------------------------------------------------------------- |
-| NVS unavailable or corrupt     | Run from RAM defaults. `persistDegraded: true` in `/api/status`, warning banner in the UI, `ERR` line on screen. Device stays fully usable; changes just don't survive reboot. |
+| NVS unavailable or corrupt     | Run from RAM defaults and log one `ERR` line. Saves then fail with `500`. Not worth a reporting path in a proof of concept — it does not happen on a working board. |
 | NVS write fails on save        | `500`, in-memory `Settings` rolled back, `ERR` logged.                                                           |
 | Malformed or oversized JSON    | `400` / `413`, nothing written.                                                                                  |
 | Any field fails validation     | `400` with per-field messages, nothing written.                                                                  |

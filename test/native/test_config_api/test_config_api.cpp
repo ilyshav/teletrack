@@ -12,7 +12,7 @@ static void test_to_json_shape() {
   const size_t n = ConfigApi::toJson(Settings::defaults(), buf, sizeof(buf));
   TEST_ASSERT_TRUE(n > 0);
   TEST_ASSERT_EQUAL_STRING(
-      "{\"schemaVersion\":1,\"deviceName\":\"teletrack\",\"sampleHz\":10}", buf);
+      "{\"deviceName\":\"teletrack\",\"sampleHz\":10}", buf);
 }
 
 static void test_ok_json() {
@@ -56,15 +56,6 @@ static void test_apply_partial_payload_leaves_other_fields_alone() {
   TEST_ASSERT_TRUE(r.status == ConfigApi::ParseStatus::Ok);
   TEST_ASSERT_EQUAL_UINT8(5, s.sampleHz);
   TEST_ASSERT_EQUAL_STRING("teletrack", s.deviceName);
-}
-
-static void test_apply_ignores_schema_version_from_the_client() {
-  Settings s = Settings::defaults();
-  const char* body = "{\"schemaVersion\":99,\"sampleHz\":5}";
-  const ConfigApi::ParseResult r = ConfigApi::applyJson(body, strlen(body), s);
-
-  TEST_ASSERT_TRUE(r.status == ConfigApi::ParseStatus::Ok);
-  TEST_ASSERT_EQUAL_UINT8(Settings::kSchemaVersion, s.schemaVersion);
 }
 
 static void test_apply_malformed_json_is_bad_json() {
@@ -185,7 +176,6 @@ int main(int, char**) {
   RUN_TEST(test_errors_json_shape);
   RUN_TEST(test_apply_valid_payload_updates_settings);
   RUN_TEST(test_apply_partial_payload_leaves_other_fields_alone);
-  RUN_TEST(test_apply_ignores_schema_version_from_the_client);
   RUN_TEST(test_apply_malformed_json_is_bad_json);
   RUN_TEST(test_apply_non_object_json_is_bad_json);
   RUN_TEST(test_apply_writes_nothing_when_any_field_is_invalid);

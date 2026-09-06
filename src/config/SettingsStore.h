@@ -15,8 +15,4 @@ class SettingsStore {
 
   // Persists `s`. Returns false when the write failed.
   virtual bool save(const Settings& s) = 0;
-
-  // False when the backing store is unusable. The device still runs, from RAM
-  // defaults, and reports persistDegraded to the client.
-  virtual bool available() const = 0;
 };

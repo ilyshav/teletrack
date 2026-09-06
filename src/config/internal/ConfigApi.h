@@ -30,7 +30,7 @@ size_t toJson(const Settings& s, char* out, size_t outSize);
 
 // Applies the fields present in `body` on top of `inOut`. `inOut` is modified
 // only when the returned status is Ok — a payload with one bad field changes
-// nothing. `schemaVersion` in the body is ignored.
+// nothing.
 ParseResult applyJson(const char* body, size_t len, Settings& inOut);
 
 size_t okToJson(char* out, size_t outSize);
