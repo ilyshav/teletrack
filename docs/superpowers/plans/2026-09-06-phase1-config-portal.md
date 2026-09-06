@@ -1744,6 +1744,8 @@ void emit(LogLevel level, const char* tag, const char* fmt, va_list args) {
   // Wider than the screen on purpose: serial gets the full line, and
   // LogRing::append truncates its own copy to the console width.
   char line[240];
+  // TODO(phase2): millis() is uptime and resets every boot. Replace with
+  // GPS-derived wall clock once the M10N module exists. See "Follow-ups".
   Format::logLine(millis(), level, tag, message, line, sizeof(line));
 
   Serial.println(line);
@@ -3840,6 +3842,33 @@ git commit -m "Document Phase 1 build, usage and module layout"
 5. **`-fno-exceptions -fno-rtti` are applied to both environments** via `[common]`.
    They are already the default for Arduino-ESP32 builds, so on the device they are
    redundant; on the host they are what the spec asked for.
+
+## Follow-ups for later phases
+
+**Log timestamps should come from GPS, not uptime.** Phase 1 stamps every log line and
+the screen header with `millis()`-derived uptime, because there is no other clock on the
+board — the ESP32-S3 has no battery-backed RTC here, so every boot restarts at
+`00:00:00`. That is fine for watching a boot sequence and useless for correlating a log
+line with a lap, a session, or anything a second device recorded.
+
+The u-blox M10N carries the fix: it reports UTC in `UBX-NAV-PVT` (and in the `GxRMC` /
+`GxZDA` NMEA sentences). Time resolves from the satellite signal *before* a full position
+fix, and `UBX-NAV-PVT` exposes `valid.validDate`, `valid.validTime` and
+`valid.fullyResolved` so the code can tell when the value is trustworthy rather than
+guessing.
+
+When the GPS module lands:
+
+- Set the system clock (`settimeofday`) once `validTime && fullyResolved` goes true, and
+  log that transition — it is the moment timestamps stop being comparable across reboots.
+- Switch `Format::logLine` and the screen header to wall-clock UTC, falling back to
+  uptime while the clock is unset. Both places already take a `uint32_t ms`, so this is a
+  change of source, not of shape.
+- Do not chase sub-second accuracy without wiring the module's PPS pin. UART delivery
+  jitter puts message-derived time in the tens-of-milliseconds range, which is plenty for
+  log correlation but not for anything claiming to time a lap.
+
+There is a `TODO(phase2)` marker on `Format::logLine` pointing here.
 
 ## Simplification pass (2026-09-06)
 
