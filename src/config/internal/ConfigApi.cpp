@@ -66,7 +66,7 @@ ParseResult applyJson(const char* body, size_t len, Settings& inOut) {
   if (!doc.is<JsonObject>()) {
     return result;
   }
-  JsonObject obj = doc.as<JsonObject>();
+  JsonObjectConst obj = doc.as<JsonObjectConst>();
 
   // Build a candidate. inOut is only overwritten if everything checks out.
   Settings candidate = inOut;
@@ -74,10 +74,13 @@ ParseResult applyJson(const char* body, size_t len, Settings& inOut) {
 
   ValidationResult typeErrors;
 
-  if (!obj["deviceName"].isNull()) {
-    const char* name = obj["deviceName"].is<const char*>()
-                           ? obj["deviceName"].as<const char*>()
-                           : nullptr;
+  // Presence is tested with is<JsonVariantConst>(), not isNull(): isNull() is
+  // true both for an absent key and for a key whose value is an explicit null,
+  // so it would report "saved" while silently discarding {"sampleHz":null}.
+  const JsonVariantConst nameField = obj["deviceName"];
+  if (nameField.is<JsonVariantConst>()) {
+    const char* name =
+        nameField.is<const char*>() ? nameField.as<const char*>() : nullptr;
     // An over-long name is rejected, never silently clipped to the buffer size.
     if (name == nullptr || strlen(name) >= Settings::kDeviceNameSize) {
       typeErrors.add("deviceName", SettingsError::kDeviceName);
@@ -87,11 +90,16 @@ ParseResult applyJson(const char* body, size_t len, Settings& inOut) {
     }
   }
 
-  if (!obj["sampleHz"].isNull()) {
-    if (!obj["sampleHz"].is<unsigned int>()) {
+  const JsonVariantConst hzField = obj["sampleHz"];
+  if (hzField.is<JsonVariantConst>()) {
+    if (!hzField.is<unsigned int>()) {
       typeErrors.add("sampleHz", SettingsError::kSampleHz);
     } else {
-      const unsigned int hz = obj["sampleHz"].as<unsigned int>();
+      // The range check below is what rejects negatives, not the type check
+      // above: ArduinoJson's integral check ignores the requested type, so
+      // is<unsigned int>() accepts -1 and as<unsigned int>() wraps it to
+      // 4294967295. Do not remove `hz > 255u` as redundant.
+      const unsigned int hz = hzField.as<unsigned int>();
       if (hz > 255u || !Settings::isValidSampleHz(static_cast<uint8_t>(hz))) {
         typeErrors.add("sampleHz", SettingsError::kSampleHz);
       } else {

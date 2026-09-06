@@ -15,8 +15,10 @@
 - PlatformIO is **not on `PATH`**. Every command in this plan assumes you first ran
   `export PATH="$HOME/.platformio/penv/bin:$PATH"` in your shell. Do it once per session.
 - C++ standard `gnu++17`. Build with `-fno-exceptions -fno-rtti`.
-- Fixed-size `char` buffers only. No Arduino `String`, no `std::string`, no `std::vector`,
-  no heap allocation after `setup()` returns.
+- Fixed-size `char` buffers for our own data. No Arduino `String`, no `std::string`,
+  no `std::vector` in code we write. Library-internal allocation is fine — ArduinoJson 7
+  allocates its document pool from the heap and that is accepted. Do not write custom
+  allocators or pools to avoid it.
 - One module per file pair, header/implementation split, `#pragma once` in every
   header. A small value type may share its producer's header when it has no
   independent use — `ValidationResult` lives in `Settings.h` because

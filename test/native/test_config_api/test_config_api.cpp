@@ -147,6 +147,41 @@ static void test_round_trip_through_json() {
   TEST_ASSERT_EQUAL_STRING("round-trip", restored.deviceName);
 }
 
+static void test_apply_rejects_an_explicit_null_sample_hz() {
+  Settings s = Settings::defaults();
+  const char* body = "{\"sampleHz\":null}";
+  const ConfigApi::ParseResult r = ConfigApi::applyJson(body, strlen(body), s);
+
+  // A present-but-null field is an error, not an absent field. Reporting Ok
+  // here would tell the client its write succeeded while discarding it.
+  TEST_ASSERT_TRUE(r.status == ConfigApi::ParseStatus::Invalid);
+  TEST_ASSERT_EQUAL_STRING(SettingsError::kSampleHz, r.validation.messageFor("sampleHz"));
+  TEST_ASSERT_EQUAL_UINT8(10, s.sampleHz);
+}
+
+static void test_apply_rejects_an_explicit_null_device_name() {
+  Settings s = Settings::defaults();
+  const char* body = "{\"deviceName\":null}";
+  const ConfigApi::ParseResult r = ConfigApi::applyJson(body, strlen(body), s);
+
+  TEST_ASSERT_TRUE(r.status == ConfigApi::ParseStatus::Invalid);
+  TEST_ASSERT_EQUAL_STRING(SettingsError::kDeviceName, r.validation.messageFor("deviceName"));
+  TEST_ASSERT_EQUAL_STRING("teletrack", s.deviceName);
+}
+
+static void test_apply_rejects_negative_and_out_of_range_sample_hz() {
+  // Guards the range check in applyJson: ArduinoJson accepts -1 as an integer
+  // and wraps it on read, so only `hz > 255u` rejects it.
+  const char* bodies[] = {"{\"sampleHz\":-1}", "{\"sampleHz\":-246}",
+                          "{\"sampleHz\":300}"};
+  for (const char* body : bodies) {
+    Settings s = Settings::defaults();
+    const ConfigApi::ParseResult r = ConfigApi::applyJson(body, strlen(body), s);
+    TEST_ASSERT_TRUE(r.status == ConfigApi::ParseStatus::Invalid);
+    TEST_ASSERT_EQUAL_UINT8(10, s.sampleHz);
+  }
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_to_json_shape);
@@ -164,5 +199,8 @@ int main(int, char**) {
   RUN_TEST(test_apply_rejects_wrong_field_types);
   RUN_TEST(test_apply_empty_object_is_a_no_op_success);
   RUN_TEST(test_round_trip_through_json);
+  RUN_TEST(test_apply_rejects_an_explicit_null_sample_hz);
+  RUN_TEST(test_apply_rejects_an_explicit_null_device_name);
+  RUN_TEST(test_apply_rejects_negative_and_out_of_range_sample_hz);
   return UNITY_END();
 }
