@@ -302,6 +302,29 @@ invalid. A u-blox receiver with no fix reports pDOP 99.99, which encoded naively
 wraps to 232 and reads as a confident 23.2. It is clamped to 0xFF now. This never
 showed up while the synthetic fix hardcoded `hdop = 1.0`.
 
+### RaceChrono drops the link but nRF Connect stays connected
+
+That asymmetry is the whole diagnosis: a generic central holds the connection
+happily, so the BLE stack is fine and RaceChrono is hanging up on purpose.
+
+**Cause:** the device exposed only the GPS half of the profile. The reference
+implementation declares four characteristics on service 0x1FF8 --
+`0x0001` CAN main (READ|NOTIFY), `0x0002` CAN filter (WRITE), `0x0003` GPS main,
+`0x0004` GPS time. RaceChrono configures a DIY device by **writing a filter
+command to 0x0002 on connect**, and against a device where that characteristic
+does not exist the write fails and the app gives up.
+
+The spec text says a device may implement whichever features it wants, which is
+what made omitting them look safe. It is not, for the connect handshake.
+
+**Fix:** declare both CAN characteristics. `0x0001` is never notified -- there is
+no CAN bus on this device -- and the `0x0002` write handler accepts and ignores
+every command, since deny-all, allow-all and allow-one-PID all mean the same
+thing with no bus. What matters is that the write succeeds.
+
+The handler logs the command byte it received, so the boot log now says whether
+RaceChrono talks to that characteristic at all.
+
 ### NimBLE version
 
 Pin **`h2zero/NimBLE-Arduino@^1.4.3`**. The 2.x line requires Arduino core 3.x / ESP-IDF

@@ -21,6 +21,12 @@ uint16_t g_mtu = 23;
 // host task, and logging there puts a USB CDC write -- which can drop or
 // stall -- in the middle of connection handling. Flag it and let loop() do
 // the talking.
+// What RaceChrono last wrote to the CAN filter characteristic, drained by
+// tick(). Recording it answers a question we could not otherwise ask: whether
+// the app talks to that characteristic at all.
+uint8_t g_filterCmd = 0;
+bool g_filterWritten = false;
+
 bool g_logConnected = false;
 bool g_logDisconnected = false;
 uint16_t g_logMtu = 0;
@@ -55,6 +61,21 @@ class ServerCallbacks : public NimBLEServerCallbacks {
 
 ServerCallbacks g_callbacks;
 
+// Accepts and ignores the filter commands: deny-all (0), allow-all (1) and
+// allow-one-PID (2) all mean the same thing to a device with no CAN bus. What
+// matters is that the write succeeds, so the app can finish configuring.
+class FilterCallbacks : public NimBLECharacteristicCallbacks {
+  void onWrite(NimBLECharacteristic* characteristic) override {
+    const std::string value = characteristic->getValue();
+    if (!value.empty()) {
+      g_filterCmd = static_cast<uint8_t>(value[0]);
+      g_filterWritten = true;
+    }
+  }
+};
+
+FilterCallbacks g_filterCallbacks;
+
 }  // namespace
 
 bool BleLink::begin(const char* deviceName, TelemetryRing& ring) {
@@ -79,6 +100,18 @@ bool BleLink::begin(const char* deviceName, TelemetryRing& ring) {
   g_server->setCallbacks(&g_callbacks, false);
 
   NimBLEService* service = g_server->createService(NimBLEUUID(kServiceUuid16));
+
+  // The CAN characteristics come first, in the order the reference declares
+  // them. Nothing is ever notified on 0x0001 -- there is no CAN bus here --
+  // but both must exist for RaceChrono to finish setting the device up.
+  service->createCharacteristic(NimBLEUUID(kCanMainUuid16),
+                                NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+  NimBLECharacteristic* filter = service->createCharacteristic(
+      NimBLEUUID(kCanFilterUuid16), NIMBLE_PROPERTY::WRITE);
+  // Not owned: NimBLECharacteristic's destructor does not delete its
+  // callbacks, unlike NimBLEServer's, so a static object is safe here.
+  filter->setCallbacks(&g_filterCallbacks);
+
   g_gpsMain = service->createCharacteristic(
       NimBLEUUID(kGpsMainUuid16), NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
   g_gpsTime = service->createCharacteristic(
@@ -131,6 +164,11 @@ void BleLink::tick(uint32_t nowMs) {
   if (g_logDisconnected) {
     g_logDisconnected = false;
     Log::info("ble", "disconnected, advertising again");
+  }
+  if (g_filterWritten) {
+    g_filterWritten = false;
+    Log::info("ble", "racechrono wrote filter command %u",
+              static_cast<unsigned>(g_filterCmd));
   }
   if (g_logMtu != 0) {
     Log::info("ble", "mtu %u", (unsigned)g_logMtu);
