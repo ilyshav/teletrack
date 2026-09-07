@@ -1,6 +1,7 @@
 #include "ui/OledDisplay.h"
 
 #include <Arduino.h>
+#include <Wire.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -24,8 +25,30 @@ bool headerDiffers(const DeviceStatus& a, const DeviceStatus& b) {
 }  // namespace
 
 bool OledDisplay::begin() {
+  // On T-Beam Supreme V3 the QMC6310N magnetometer sits at 0x3C, the panel's
+  // usual address, and the panel moves to 0x3D. Both then ACK, so an address
+  // probe alone cannot tell them apart -- but if BOTH answer, 0x3C is the
+  // magnetometer. Writing frames to it succeeds silently and lights nothing.
+  // See meshcore-dev/MeshCore#2609.
+  auto responds = [](uint8_t addr) {
+    Wire.beginTransmission(addr);
+    return Wire.endTransmission() == 0;
+  };
+  const bool primary = responds(kAddrPrimary);
+  const bool alternate = responds(kAddrAlternate);
+  const uint8_t addr = (primary && alternate) ? kAddrAlternate
+                       : primary             ? kAddrPrimary
+                                             : kAddrAlternate;
+  if (primary && alternate) {
+    Log::info("display", "0x%02X and 0x%02X both answer: 0x%02X is the "
+                         "magnetometer, using 0x%02X",
+              kAddrPrimary, kAddrAlternate, kAddrPrimary, addr);
+  } else {
+    Log::info("display", "using 0x%02X", addr);
+  }
+
   u8g2_.setBusClock(400000);
-  u8g2_.setI2CAddress(0x3C << 1);  // u8g2 wants the address pre-shifted
+  u8g2_.setI2CAddress(addr << 1);  // u8g2 wants the address pre-shifted
   if (!u8g2_.begin()) {
     return false;
   }

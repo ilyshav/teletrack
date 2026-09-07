@@ -18,6 +18,11 @@ class OledDisplay : public Display {
   static constexpr size_t kLogRows = 6;
   static constexpr int16_t kRowHeight = 8;
 
+  // 0x3C is the SSD1306/SH1106 default, but on T-Beam Supreme V3 the QMC6310N
+  // magnetometer occupies it and the panel moves to 0x3D.
+  static constexpr uint8_t kAddrPrimary = 0x3C;
+  static constexpr uint8_t kAddrAlternate = 0x3D;
+
   bool begin() override;
   void tick(uint32_t nowMs, const DeviceStatus& status) override;
 
