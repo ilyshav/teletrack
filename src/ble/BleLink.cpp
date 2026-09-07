@@ -17,6 +17,14 @@ NimBLECharacteristic* g_gpsTime = nullptr;
 bool g_connected = false;
 uint16_t g_mtu = 23;
 
+// Set by the callbacks, drained by tick(). The callbacks run on the NimBLE
+// host task, and logging there puts a USB CDC write -- which can drop or
+// stall -- in the middle of connection handling. Flag it and let loop() do
+// the talking.
+bool g_logConnected = false;
+bool g_logDisconnected = false;
+uint16_t g_logMtu = 0;
+
 class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer* server, ble_gap_conn_desc* desc) override {
     g_connected = true;
@@ -27,19 +35,21 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     // connect, which is what a central refuses by dropping the link.
     // 15 ms still carries 66 notifications a second against the 25 we send.
     server->updateConnParams(desc->conn_handle, 12, 24, 0, 400);
-    Log::info("ble", "connected");
+    g_logConnected = true;
   }
 
   void onDisconnect(NimBLEServer* server) override {
     g_connected = false;
     g_mtu = 23;
-    Log::info("ble", "disconnected, advertising again");
-    NimBLEDevice::startAdvertising();
+    g_logDisconnected = true;
+    // No startAdvertising() here: NimBLEServer::m_advertiseOnDisconnect
+    // defaults to true and the stack restarts it for us the moment this
+    // callback returns. Doing it again just fails with EALREADY.
   }
 
   void onMTUChange(uint16_t mtu, ble_gap_conn_desc* desc) override {
     g_mtu = mtu;
-    Log::info("ble", "mtu %u", (unsigned)mtu);
+    g_logMtu = mtu;
   }
 };
 
@@ -111,6 +121,21 @@ void BleLink::tick(uint32_t nowMs) {
   (void)nowMs;
   connected_ = g_connected;
   mtu_ = g_mtu;
+
+  // The callbacks only raise flags; the logging happens here, on loop(), so a
+  // slow serial host can never delay connection handling.
+  if (g_logConnected) {
+    g_logConnected = false;
+    Log::info("ble", "connected");
+  }
+  if (g_logDisconnected) {
+    g_logDisconnected = false;
+    Log::info("ble", "disconnected, advertising again");
+  }
+  if (g_logMtu != 0) {
+    Log::info("ble", "mtu %u", (unsigned)g_logMtu);
+    g_logMtu = 0;
+  }
 
   if (!connected_ || ring_ == nullptr || g_gpsMain == nullptr) {
     return;

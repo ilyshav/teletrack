@@ -258,6 +258,30 @@ fix per notification -- 500 B/s at 25 Hz. The reference implementation does none
 of them, and each one is a deviation that can fail against a central we do not
 control.
 
+### Log lines arrive truncated, and BLE drops around the same time
+
+**Symptom:** serial shows partial lines -- `00:00:35 [INF] b`, `00:00:40 [INF]`
+with nothing after, a line starting mid-timestamp -- alongside a connect/drop
+cycle.
+
+**Cause:** `USBCDC::tx_timeout_ms` defaults to **250 ms**. When the host is not
+draining the buffer, `Serial.write` blocks that long and then returns short,
+which is what cuts a line in half. Whichever task called the logger wears the
+stall -- and `NimBLEServerCallbacks::onConnect`/`onDisconnect` run on the
+**NimBLE host task**, so a log line there stalls connection handling by a
+quarter second at exactly the moment a central is discovering services.
+
+**Fix, two parts:**
+- `Serial.setTxTimeoutMs(0)` in `Log::begin()`. A log line is never worth
+  stalling a task for; a write that will not fit now drops instead of waiting.
+- The BLE callbacks set flags and `BleLink::tick()` does the logging, on
+  `loop()`. Nothing on the host task touches serial.
+
+**Also removed:** the explicit `startAdvertising()` in `onDisconnect`.
+`NimBLEServer::m_advertiseOnDisconnect` defaults to true, so the stack restarts
+advertising itself as soon as the callback returns; calling it again just fails
+with `EALREADY`.
+
 ### NimBLE version
 
 Pin **`h2zero/NimBLE-Arduino@^1.4.3`**. The 2.x line requires Arduino core 3.x / ESP-IDF
