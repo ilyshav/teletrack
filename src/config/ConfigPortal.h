@@ -8,6 +8,7 @@
 #include "config/internal/ApManager.h"
 #include "config/internal/CaptivePortal.h"
 #include "config/internal/NvsStore.h"
+#include "config/internal/WebUi.h"
 #include "core/DeviceStatus.h"
 
 // The configuration module's whole public surface, besides Settings.
@@ -39,4 +40,5 @@ class ConfigPortal {
   ApManager ap_;
   CaptivePortal portal_;
   AsyncWebServer server_;
+  WebUi web_;
 };

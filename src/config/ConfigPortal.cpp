@@ -5,7 +5,7 @@
 #include "core/Log.h"
 
 ConfigPortal::ConfigPortal(Settings& settings)
-    : settings_(settings), server_(kHttpPort) {}
+    : settings_(settings), server_(kHttpPort), web_(settings, store_, *this) {}
 
 bool ConfigPortal::begin() {
   if (!store_.begin()) {
@@ -22,6 +22,7 @@ bool ConfigPortal::begin() {
   }
 
   portal_.begin(IPAddress(192, 168, 4, 1));
+  web_.registerRoutes(server_);
   portal_.registerRoutes(server_);
   server_.begin();
   Log::info("http", "listening on port %u", (unsigned)kHttpPort);
