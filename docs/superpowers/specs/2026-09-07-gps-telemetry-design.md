@@ -209,9 +209,17 @@ constant is deleted. The configured rate becomes `CFG-RATE-MEAS = 1000 / sampleH
 and the firmware sends one RaceChrono packet per NAV-PVT frame, so the receiver's
 own rate is the sample rate. No timer, no resampling.
 
-**25 Hz is clamped to 10 Hz** and logged. The MAX-M10S supports 25 Hz only with a
-single constellation; at the multi-GNSS default its ceiling is 10 Hz. Silently
-running at the wrong rate would be worse than saying so.
+**25 Hz is supported, by disabling the other constellations.** The MAX-M10S reaches
+25 Hz with a single GNSS; 10 Hz is the ceiling only when several run concurrently.
+Asking for 25 therefore switches Galileo, BeiDou, GLONASS, SBAS and QZSS off and
+leaves GPS on, and logs that it did. Below that threshold all of them are switched
+back on — the set is written explicitly in both directions, so dropping the rate
+back does not silently leave the receiver GPS-only from an earlier run.
+
+That is a real trade and the log line says so: fewer constellations means fewer
+satellites in view and worse accuracy in a pit lane or under trees, bought against
+a faster update. At 25 Hz, NAV-PVT is 2500 B/s against the 11520 B/s that 115200
+baud carries, so the link is not the constraint.
 
 A rate change takes effect on the next radio restart, the same path a device rename
 already uses.

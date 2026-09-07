@@ -2,6 +2,15 @@
 
 #include "core/Log.h"
 
+// Board-independent: main.cpp needs it on the DevKitC too, where the rest of
+// this file compiles to a stub.
+uint8_t GpsReceiver::effectiveRate(uint8_t requested) {
+  if (requested == 0) {
+    return 1;
+  }
+  return requested > kMaxRateHz ? kMaxRateHz : requested;
+}
+
 #if defined(BOARD_TBEAM)
 
 #include <Arduino.h>
@@ -27,6 +36,13 @@ constexpr uint32_t kKeyUart1Baud = 0x40520001;    // U4
 constexpr uint32_t kKeyNavPvtUart1 = 0x20910007;  // U1
 constexpr uint32_t kKeyRateMeas = 0x30210001;     // U2
 constexpr uint32_t kKeyRateNav = 0x30210002;      // U2
+constexpr uint32_t kKeyGpsEna = 0x1031001f;   // L
+constexpr uint32_t kKeySbasEna = 0x10310020;  // L
+constexpr uint32_t kKeyGalEna = 0x10310021;   // L
+constexpr uint32_t kKeyBdsEna = 0x10310022;   // L
+constexpr uint32_t kKeyQzssEna = 0x10310024;  // L
+constexpr uint32_t kKeyGloEna = 0x10310025;   // L
+
 constexpr uint32_t kKeyNmeaOff[] = {
     0x209100bb,  // GGA
     0x209100ca,  // GLL
@@ -126,14 +142,7 @@ bool probe(uint32_t baud) {
 }  // namespace
 
 bool GpsReceiver::begin(uint8_t rateHz) {
-  if (rateHz == 0) {
-    rateHz = 1;
-  }
-  if (rateHz > kMaxRateHz) {
-    Log::warn("gps", "%u Hz is above the MAX-M10S limit, using %u Hz",
-              static_cast<unsigned>(rateHz), static_cast<unsigned>(kMaxRateHz));
-    rateHz = kMaxRateHz;
-  }
+  rateHz = effectiveRate(rateHz);
 
   uint32_t found = 0;
   for (uint32_t baud : kBaudCandidates) {
@@ -177,6 +186,27 @@ bool GpsReceiver::begin(uint8_t rateHz) {
     n = addU1(p, n, kKeyNavPvtUart1, 1);
     sendUbx(kClassCfg, kIdValset, p, static_cast<uint16_t>(n));
   }
+  // The whole constellation set is written explicitly in both directions, so
+  // dropping the rate back re-enables what a previous high-rate run switched
+  // off. Sent before the rate, or the receiver rejects a rate it cannot meet
+  // with the constellations it currently has.
+  const bool singleGnss = rateHz > kMaxConcurrentRateHz;
+  {
+    uint8_t p[64];
+    size_t n = beginValset(p);
+    n = addU1(p, n, kKeyGpsEna, 1);
+    n = addU1(p, n, kKeyGalEna, singleGnss ? 0 : 1);
+    n = addU1(p, n, kKeyBdsEna, singleGnss ? 0 : 1);
+    n = addU1(p, n, kKeyGloEna, singleGnss ? 0 : 1);
+    n = addU1(p, n, kKeySbasEna, singleGnss ? 0 : 1);
+    n = addU1(p, n, kKeyQzssEna, singleGnss ? 0 : 1);
+    sendUbx(kClassCfg, kIdValset, p, static_cast<uint16_t>(n));
+  }
+  if (singleGnss) {
+    Log::info("gps", "%u Hz needs a single constellation: GPS only, others off",
+              static_cast<unsigned>(rateHz));
+  }
+
   {
     uint8_t p[24];
     size_t n = beginValset(p);

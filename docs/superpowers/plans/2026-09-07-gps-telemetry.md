@@ -20,7 +20,7 @@
 - **T-Beam pins (vendor-confirmed):** GPS UART RX `9`, TX `8`. GPIO 7 (`GPS_EN`) and GPIO 6 (`PPS`) are deliberately not driven.
 - **GPS power is ALDO4 @ 3300 mV.** GNSS RTC backup is VBACKUP @ 3300 mV.
 - **Target baud is 115200.** Detection order is `115200, 38400, 9600`, 250 ms each.
-- **Max nav rate is 10 Hz.** `Settings::sampleHz` allows `{1, 5, 10, 25}`; 25 clamps to 10 and logs.
+- **Max nav rate is 25 Hz with one constellation, 10 Hz with several.** `Settings::sampleHz` allows `{1, 5, 10, 25}`; asking for 25 disables Galileo/BeiDou/GLONASS/SBAS/QZSS and logs it.
 - **Nothing is sent to RaceChrono unless `validDate && validTime` are both set** and a client is connected.
 - **Never regress the DevKitC.** `pio run -e esp` must keep building and its behaviour must not change.
 - **Commit messages must not contain any AI attribution or Co-Authored-By trailer.**

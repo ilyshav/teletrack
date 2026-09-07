@@ -136,6 +136,21 @@ theories for a dark panel whose actual fault was an I2C address collision.
 `GPS_RX_PIN 9`, `GPS_TX_PIN 8` (ESP32 side), `GPS_EN_PIN 7`, `GPS_PPS_PIN 6`.
 LilyGO's code never drives GPS_EN or PPS, so neither does ours.
 
+### 25 Hz needs a single constellation
+
+The MAX-M10S datasheet's headline rate is 25 Hz, but that is **GPS-only**. With
+several constellations running concurrently the ceiling is 10 Hz, and the receiver
+will not accept a faster rate while they are enabled.
+
+`GpsReceiver::begin()` therefore writes the constellation set before the rate:
+above 10 Hz it enables GPS and disables Galileo, BeiDou, GLONASS, SBAS and QZSS;
+at or below 10 Hz it switches them all back on. Writing the set explicitly in both
+directions matters — otherwise dropping the rate after a 25 Hz run would leave the
+receiver quietly GPS-only.
+
+Fewer constellations means fewer satellites in view and worse accuracy where sky
+view is poor. That is the trade 25 Hz buys, and the boot log says when it is made.
+
 ### The GPS baud rate is not knowable in advance
 
 LilyGO's board support defines `GPS_BAUD_RATE 9600`, u-blox M10 modules leave

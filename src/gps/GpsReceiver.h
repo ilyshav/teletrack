@@ -13,8 +13,17 @@
 // false, exactly like Pmu.
 class GpsReceiver {
  public:
-  // The MAX-M10S tops out at 10 Hz with more than one constellation enabled.
-  static constexpr uint8_t kMaxRateHz = 10;
+  // The MAX-M10S reaches 25 Hz with a single constellation; 10 Hz is the
+  // ceiling only when several run concurrently. Asking for more than
+  // kMaxConcurrentRateHz makes begin() disable the others rather than refuse
+  // the rate.
+  static constexpr uint8_t kMaxRateHz = 25;
+  static constexpr uint8_t kMaxConcurrentRateHz = 10;
+
+  // The rate begin() will actually use for a requested one. Callers compare
+  // against this rather than against the raw setting: comparing against a
+  // value that gets adjusted makes a restart guard fire forever.
+  static uint8_t effectiveRate(uint8_t requested);
 
   // Opens the UART, finds the module, and configures it for rateHz. Returns
   // false when nothing answers at any baud -- a dead receiver must not stop
