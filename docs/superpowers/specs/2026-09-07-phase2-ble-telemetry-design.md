@@ -98,8 +98,13 @@ ceiling of roughly 40–100 kB/s.
 
 Every one of these is required; the budget does not close without them:
 
-- **NimBLE-Arduino 2.5.1** rather than the bundled Bluedroid `BLE` library — half the
-  flash and about 100 KB less RAM.
+- **NimBLE-Arduino 1.4.3** rather than the bundled Bluedroid `BLE` library — half the
+  flash and about 100 KB less RAM. Version 1.4.3 specifically: this project is on
+  `espressif32@7.0.1`, which resolves to Arduino core 2.0.17 (ESP-IDF 4.4), and the
+  NimBLE 2.x line requires Arduino core 3.x / IDF 5.x. 1.4.3 is the last release of
+  the 1.x line. Upgrading the platform to reach NimBLE 2.x is explicitly not worth it
+  here — the current platform pin is what the working TFT and WiFi configuration was
+  verified against.
 - **ATT MTU negotiated to 517**, so a full batch fits in one notification.
 - **LE 2M PHY** requested on connect.
 - **Data Length Extension** enabled.
