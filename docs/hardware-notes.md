@@ -113,6 +113,31 @@ Buttons need no external resistor — `pinMode(pin, INPUT_PULLUP)` and wire to g
 
 ---
 
+## T-Beam Supreme power rails
+
+From LilyGO's own board support (Xinyuan-LilyGO/LilyGo-LoRa-Series,
+`examples/.../LoRaBoards.cpp`), not from guesswork:
+
+| Rail | Feeds |
+| --- | --- |
+| ALDO1 | sensors (magnetometer, BME280) |
+| ALDO2 | SD card |
+| ALDO3 | LoRa |
+| **ALDO4** | **GPS** |
+| VBACKUP | GNSS RTC backup — without it every start is a cold start |
+| DCDC1 | ESP32 VDD — protected, never disable |
+
+**The display is on none of them.** An earlier version of `Pmu.cpp` labelled
+ALDO2 "display" and ALDO3 "GPS"; both were wrong, and hours went into power
+theories for a dark panel whose actual fault was an I2C address collision.
+
+### GPS pins
+
+`GPS_RX_PIN 9`, `GPS_TX_PIN 8` (ESP32 side), `GPS_EN_PIN 7`, `GPS_PPS_PIN 6`.
+LilyGO's code never drives GPS_EN or PPS, so neither does ours.
+
+---
+
 ## Serial
 
 ### Reading the port yourself returns zero bytes
