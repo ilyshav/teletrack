@@ -36,6 +36,7 @@
   }
   input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
   .err { color: var(--bad); font-size: 12px; min-height: 15px; margin-top: 3px; }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 4px; }
   button {
     width: 100%; margin-top: 16px; padding: 11px; font: inherit; font-weight: 600;
     color: #fff; background: var(--accent); border: 0; border-radius: 7px;
@@ -60,6 +61,8 @@
     <label for="deviceName">Device name</label>
     <input id="deviceName" name="deviceName" autocomplete="off"
            autocapitalize="off" spellcheck="false">
+    <div class="hint">Saving a new name restarts the radio right away. In WiFi
+      mode that disconnects you from this page.</div>
     <div class="err" id="e-deviceName"></div>
 
     <label for="sampleHz">Sample rate</label>

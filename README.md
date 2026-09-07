@@ -13,6 +13,14 @@ yet.
 Design: `docs/superpowers/specs/2026-09-06-phase1-config-portal-design.md`
 Plan: `docs/superpowers/plans/2026-09-06-phase1-config-portal.md`
 
+## Hardware notes
+
+`docs/hardware-notes.md` collects the platform landmines this board has already cost
+time on — boot loops from the partition table, build flags that silently do nothing,
+the TFT SPI-port crash, which GPIOs are unusable, why reading the serial port yourself
+returns nothing, and the BLE advertisement limits. Symptom first, since that is how you
+arrive there.
+
 ## Building
 
 | Command | What it does |

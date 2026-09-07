@@ -19,6 +19,9 @@ class CaptivePortal {
   // Registers the probe routes and the catch-all. Call before server.begin().
   void registerRoutes(AsyncWebServer& server);
 
+  // Stops answering DNS. Safe to call when never begun.
+  void end();
+
  private:
   DNSServer dns_;
   bool up_ = false;

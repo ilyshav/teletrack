@@ -16,7 +16,9 @@ class ConfigPortal;
 // it belongs in one of those instead.
 class WebUi {
  public:
-  WebUi(Settings& settings, SettingsStore& store, const ConfigPortal& portal);
+  // Non-const: a successful rename flags the pending restart on portal, which
+  // status() (used read-only elsewhere) does not need to know about.
+  WebUi(Settings& settings, SettingsStore& store, ConfigPortal& portal);
 
   // Call before AsyncWebServer::begin().
   void registerRoutes(AsyncWebServer& server);
@@ -28,7 +30,7 @@ class WebUi {
 
   Settings& settings_;
   SettingsStore& store_;
-  const ConfigPortal& portal_;
+  ConfigPortal& portal_;
 
   // POST body accumulation. One buffer is enough: the AsyncTCP task delivers
   // request bodies one at a time, and owner_ guards against a completion
