@@ -69,7 +69,13 @@ bool BleLink::begin(const char* deviceName, TelemetryRing& ring) {
   NimBLEAdvertising* advertising = NimBLEDevice::getAdvertising();
   advertising->addServiceUUID(kServiceUuid);
   advertising->setScanResponse(true);
-  advertising->start();
+  if (!advertising->start()) {
+    // start() fails if the advertisement payload will not fit in 31 bytes,
+    // among other things. Logging success unconditionally would report a
+    // device that is on the air when it is not.
+    Log::error("ble", "advertising failed to start");
+    return false;
+  }
 
   Log::info("ble", "advertising as %s", deviceName);
   return true;
