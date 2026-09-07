@@ -15,12 +15,6 @@ Plan: `docs/superpowers/plans/2026-09-06-phase1-config-portal.md`
 
 ## Building
 
-PlatformIO is not on `PATH` by default:
-
-```bash
-export PATH="$HOME/.platformio/penv/bin:$PATH"
-```
-
 | Command | What it does |
 | --- | --- |
 | `pio run -e esp` | Build the firmware |
