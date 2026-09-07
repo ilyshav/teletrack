@@ -229,6 +229,126 @@ static void test_a_navpvt_of_the_wrong_length_is_rejected() {
   TEST_ASSERT_EQUAL_INT(0, feedAll(parser, f.bytes, f.len));
 }
 
+static void test_every_field_decodes() {
+  UbxParser parser;
+  const Frame f = makePvtFrame();
+  TEST_ASSERT_EQUAL_INT(1, feedAll(parser, f.bytes, f.len));
+
+  const GpsFix& fix = parser.fix();
+  TEST_ASSERT_EQUAL_UINT16(2026, fix.year);
+  TEST_ASSERT_EQUAL_UINT8(9, fix.month);
+  TEST_ASSERT_EQUAL_UINT8(7, fix.day);
+  TEST_ASSERT_EQUAL_UINT8(14, fix.hour);
+  TEST_ASSERT_EQUAL_UINT8(23, fix.minute);
+  TEST_ASSERT_EQUAL_UINT8(45, fix.seconds);
+  TEST_ASSERT_EQUAL_UINT16(500, fix.millis);
+  TEST_ASSERT_EQUAL_UINT8(3, fix.fixType);
+  TEST_ASSERT_EQUAL_UINT8(1, fix.fixQuality);
+  TEST_ASSERT_EQUAL_UINT8(9, fix.satellites);
+  TEST_ASSERT_EQUAL_INT32(523713400, fix.latE7);
+  TEST_ASSERT_EQUAL_INT32(48952100, fix.lonE7);
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 12.0f, fix.altitudeM);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 48.2f, fix.speedKmh);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 123.45f, fix.bearingDeg);
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.9f, fix.hdop);
+  TEST_ASSERT_TRUE(parser.timeValid());
+}
+
+static void test_negative_latitude_and_longitude_are_signed() {
+  PvtFields fields;
+  fields.lat = -523713400;
+  fields.lon = -48952100;
+  UbxParser parser;
+  const Frame f = makePvtFrame(fields);
+  TEST_ASSERT_EQUAL_INT(1, feedAll(parser, f.bytes, f.len));
+  TEST_ASSERT_EQUAL_INT32(-523713400, parser.fix().latE7);
+  TEST_ASSERT_EQUAL_INT32(-48952100, parser.fix().lonE7);
+}
+
+static void test_no_fix_reports_quality_zero_but_keeps_satellites() {
+  PvtFields fields;
+  fields.fixType = 0;
+  fields.flags = 0x00;
+  fields.numSV = 4;
+  UbxParser parser;
+  const Frame f = makePvtFrame(fields);
+  TEST_ASSERT_EQUAL_INT(1, feedAll(parser, f.bytes, f.len));
+  TEST_ASSERT_EQUAL_UINT8(0, parser.fix().fixQuality);
+  // The count is what tells you the receiver is alive while you wait.
+  TEST_ASSERT_EQUAL_UINT8(4, parser.fix().satellites);
+}
+
+static void test_two_d_fix_is_quality_one() {
+  PvtFields fields;
+  fields.fixType = 2;
+  fields.flags = 0x01;
+  UbxParser parser;
+  const Frame f = makePvtFrame(fields);
+  TEST_ASSERT_EQUAL_INT(1, feedAll(parser, f.bytes, f.len));
+  TEST_ASSERT_EQUAL_UINT8(1, parser.fix().fixQuality);
+  TEST_ASSERT_EQUAL_UINT8(2, parser.fix().fixType);
+}
+
+static void test_differential_fix_is_quality_two() {
+  PvtFields fields;
+  fields.fixType = 3;
+  fields.flags = 0x03;  // gnssFixOK | diffSoln
+  UbxParser parser;
+  const Frame f = makePvtFrame(fields);
+  TEST_ASSERT_EQUAL_INT(1, feedAll(parser, f.bytes, f.len));
+  TEST_ASSERT_EQUAL_UINT8(2, parser.fix().fixQuality);
+}
+
+static void test_gnss_fix_ok_clear_overrides_a_good_fix_type() {
+  PvtFields fields;
+  fields.fixType = 3;
+  fields.flags = 0x00;  // gnssFixOK clear
+  UbxParser parser;
+  const Frame f = makePvtFrame(fields);
+  TEST_ASSERT_EQUAL_INT(1, feedAll(parser, f.bytes, f.len));
+  TEST_ASSERT_EQUAL_UINT8(0, parser.fix().fixQuality);
+}
+
+static void test_time_valid_requires_both_date_and_time_flags() {
+  UbxParser parser;
+
+  PvtFields dateOnly;
+  dateOnly.valid = 0x01;
+  const Frame a = makePvtFrame(dateOnly);
+  TEST_ASSERT_EQUAL_INT(1, feedAll(parser, a.bytes, a.len));
+  TEST_ASSERT_FALSE(parser.timeValid());
+
+  PvtFields timeOnly;
+  timeOnly.valid = 0x02;
+  const Frame b = makePvtFrame(timeOnly);
+  TEST_ASSERT_EQUAL_INT(1, feedAll(parser, b.bytes, b.len));
+  TEST_ASSERT_FALSE(parser.timeValid());
+
+  PvtFields both;
+  both.valid = 0x03;
+  const Frame c = makePvtFrame(both);
+  TEST_ASSERT_EQUAL_INT(1, feedAll(parser, c.bytes, c.len));
+  TEST_ASSERT_TRUE(parser.timeValid());
+}
+
+static void test_negative_nano_yields_zero_millis() {
+  PvtFields fields;
+  fields.nano = -250000000;  // the fix is 250 ms before the reported second
+  UbxParser parser;
+  const Frame f = makePvtFrame(fields);
+  TEST_ASSERT_EQUAL_INT(1, feedAll(parser, f.bytes, f.len));
+  TEST_ASSERT_EQUAL_UINT16(0, parser.fix().millis);
+}
+
+static void test_maximum_nano_clamps_to_999_millis() {
+  PvtFields fields;
+  fields.nano = 999999999;
+  UbxParser parser;
+  const Frame f = makePvtFrame(fields);
+  TEST_ASSERT_EQUAL_INT(1, feedAll(parser, f.bytes, f.len));
+  TEST_ASSERT_EQUAL_UINT16(999, parser.fix().millis);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_a_valid_frame_is_accepted_on_its_last_byte);
@@ -241,5 +361,14 @@ int main(int, char**) {
   RUN_TEST(test_another_ubx_message_is_consumed_but_not_reported);
   RUN_TEST(test_a_message_longer_than_navpvt_does_not_overflow);
   RUN_TEST(test_a_navpvt_of_the_wrong_length_is_rejected);
+  RUN_TEST(test_every_field_decodes);
+  RUN_TEST(test_negative_latitude_and_longitude_are_signed);
+  RUN_TEST(test_no_fix_reports_quality_zero_but_keeps_satellites);
+  RUN_TEST(test_two_d_fix_is_quality_one);
+  RUN_TEST(test_differential_fix_is_quality_two);
+  RUN_TEST(test_gnss_fix_ok_clear_overrides_a_good_fix_type);
+  RUN_TEST(test_time_valid_requires_both_date_and_time_flags);
+  RUN_TEST(test_negative_nano_yields_zero_millis);
+  RUN_TEST(test_maximum_nano_clamps_to_999_millis);
   return UNITY_END();
 }
