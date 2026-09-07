@@ -41,7 +41,7 @@ degraded timing on both, the device is in exactly one mode at a time.
 | `Wifi` | SoftAP + captive portal | any browser (Phase 1) |
 
 - **Boot mode is `Ble`.** The device advertises immediately on power-up.
-- **GPIO4 held for 3 seconds** toggles the mode. Active-low with an internal pull-up.
+- **GPIO39 held for 3 seconds** toggles the mode. Active-low with an internal pull-up.
 - On a switch, the outgoing stack is fully torn down before the incoming one starts.
 
 ### Why the button is a 3-second hold
@@ -53,9 +53,9 @@ it should and holding longer does not toggle twice.
 
 The screen counts the hold down while the button is held, so the timing is visible.
 
-### Prerequisite: GPIO4 must be wired
+### Prerequisite: GPIO39 must be wired
 
-Boot mode is `Ble` and the button is the only way out of it. Until GPIO4 has a button
+Boot mode is `Ble` and the button is the only way out of it. Until GPIO39 has a button
 on it, a flashed device advertises over BLE and its configuration portal cannot be
 reached at all.
 
@@ -241,12 +241,12 @@ No failure path reboots the device.
 
 - BLE advertises and accepts a connection.
 - Throughput measured per §9.
-- Mode switch via GPIO4, once the button is wired. Until then this is untestable
+- Mode switch via GPIO39, once the button is wired. Until then this is untestable
   on hardware, which is why the hold logic is host-tested against synthetic
   timestamps.
 
 **Manual acceptance:** power on → `BLE ADV` on screen → connect a phone →
-`BLE CONN` with a live rate → run the throughput measurement → hold GPIO4 for 3 s →
+`BLE CONN` with a live rate → run the throughput measurement → hold GPIO39 for 3 s →
 screen shows `AP UP` and the config page is reachable → hold again or reboot → back to
 BLE.
 
@@ -257,8 +257,8 @@ BLE.
 - [ ] Sustained throughput ≥ 30 kB/s with < 1% sequence loss, measured and recorded.
 - [ ] `tools/ble_throughput.py` produces a repeatable measurement from the laptop.
 - [ ] Dropped samples are counted, exposed in `status`, and shown on screen.
-- [ ] Holding GPIO4 for 3 s switches to WiFi and the Phase 1 portal works unchanged.
-- [ ] GPIO4 held 3 s toggles the mode, once the button is wired.
+- [ ] Holding GPIO39 for 3 s switches to WiFi and the Phase 1 portal works unchanged.
+- [ ] GPIO39 held 3 s toggles the mode, once the button is wired.
 - [ ] The screen always shows the current mode.
 - [ ] Host test suite passes with no hardware attached.
 
@@ -269,7 +269,7 @@ that negotiates a 30 ms connection interval will roughly halve throughput regard
 of what the firmware does. This is why the acceptance criterion records the negotiated
 MTU and interval alongside the rate — a number without them is not interpretable.
 
-**GPIO4 is not wired.** Until it is, there is no way out of BLE mode and the
+**GPIO39 is not wired.** Until it is, there is no way out of BLE mode and the
 configuration portal is unreachable — the device must be reflashed to recover. There
 is no software safety net by design. Wire the button before relying on this firmware.
 

@@ -31,7 +31,7 @@
 - **Validate untrusted input; trust our own callers.** No defensive guards against
   callers that do not exist. This is a proof of concept.
 - Only `Display::tick()` touches SPI, and only from `loop()`.
-- Mode button is **GPIO4**, active-low, `INPUT_PULLUP`, hold **3000 ms** to toggle.
+- Mode button is **GPIO39**, active-low, `INPUT_PULLUP`, hold **3000 ms** to toggle.
 - Commit after every task. Never commit `src/config/internal/ui_index.h` (generated).
 - There is a `.superpowers/` directory at the repo root; it self-ignores. Never
   `git add` it and never use `git add -A`.
@@ -509,12 +509,12 @@ uint32_t HoldDetector::heldMs(uint32_t nowMs) const {
 
 #include "radio/HoldDetector.h"
 
-// GPIO4, wired to ground through a button, using the internal pull-up: the pin
+// GPIO39, wired to ground through a button, using the internal pull-up: the pin
 // reads LOW while pressed. All timing lives in HoldDetector; this is only the
 // pin read.
 class ModeButton {
  public:
-  static constexpr uint8_t kPin = 4;
+  static constexpr uint8_t kPin = 39;
 
   void begin();
 
@@ -1652,9 +1652,9 @@ interpretable** — the acceptance target of ≥ 30 kB/s assumes a 517-byte MTU.
 1. Power on → screen shows `BLE ADV` / `WAITING`.
 2. Connect a phone → `BLE CONN` with a live kB/s and a drop count.
 3. Disconnect → back to `BLE ADV`, device keeps running.
-4. Hold GPIO4 for 3 s → screen counts down, then `AP UP`; the Phase 1 config page is
+4. Hold GPIO39 for 3 s → screen counts down, then `AP UP`; the Phase 1 config page is
    reachable at `192.168.4.1`.
-5. Hold GPIO4 again → back to `BLE ADV`, and a phone can reconnect.
+5. Hold GPIO39 again → back to `BLE ADV`, and a phone can reconnect.
 6. Power-cycle → boots to `BLE ADV`.
 
 - [ ] **Step 6: Record the numbers in this plan**
@@ -1685,7 +1685,7 @@ git commit -m "Add BLE throughput measurement tool and record results"
 
 1. **`HoldDetector` split out of `ModeButton`** (Task 2). The spec names only
    `ModeButton`. Splitting the timing into a pure class is what lets the 3-second
-   behaviour be host-tested while GPIO4 is unwired.
+   behaviour be host-tested while GPIO39 is unwired.
 2. **NimBLE pinned to 1.4.3, not 2.5.1.** The 2.x line needs Arduino core 3.x; this
    project is on 2.0.17. The spec was corrected before this plan was written.
 3. **No host test for `ConfigPortal::end()`** (Task 4). It is Arduino teardown calls
