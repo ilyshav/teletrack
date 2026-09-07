@@ -7,6 +7,8 @@
 #include "ble/BleLink.h"
 #include "ble/RaceChronoGps.h"
 #include "ble/TelemetryRing.h"
+#include "board/BoardConfig.h"
+#include "board/Pmu.h"
 #include "config/ConfigPortal.h"
 #include "config/Settings.h"
 #include "core/DeviceStatus.h"
@@ -14,6 +16,14 @@
 #include "radio/ModeButton.h"
 #include "radio/RadioMode.h"
 #include "ui/Display.h"
+
+#if defined(BOARD_TBEAM)
+#include "ui/OledDisplay.h"
+using BoardDisplay = OledDisplay;
+#else
+#include "ui/TftDisplay.h"
+using BoardDisplay = TftDisplay;
+#endif
 
 namespace {
 
@@ -55,7 +65,8 @@ struct App {
   RaceChronoGps gps;
   ModeButton button;
   ModeController modes;
-  Display display;
+  Pmu pmu;
+  BoardDisplay display;
 };
 
 App app;
@@ -177,10 +188,21 @@ void updateRate(uint32_t nowMs) {
 
 void setup() {
   Log::begin(115200);
-  if (!app.display.begin()) {
-    Log::error("tft", "display init failed, serial only");
+  Log::info("boot", "teletrack on %s", BoardConfig::kBoardName);
+
+  // Before the display: on the T-Beam the panel sits on a rail this switches.
+  if (!app.pmu.begin()) {
+    Log::error("pmu", "power management failed to start");
   }
-  Log::info("boot", "teletrack");
+
+  // The panel's charge pump needs a moment after its rail comes up before it
+  // will accept initialisation.
+  delay(100);
+  if (!app.display.begin()) {
+    Log::error("display", "init failed, serial only");
+  } else {
+    Log::info("display", "init ok");
+  }
 
   app.button.begin();
   startCurrentMode();

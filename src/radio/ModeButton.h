@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 
+#include "board/BoardConfig.h"
 #include "radio/HoldDetector.h"
 
 // GPIO39, wired to ground through a button, using the internal pull-up: the pin
@@ -14,7 +15,7 @@
 // external JTAG probe is attached.
 class ModeButton {
  public:
-  static constexpr uint8_t kPin = 39;
+  static constexpr uint8_t kPin = BoardConfig::kModeButtonPin;
 
   void begin();
 
