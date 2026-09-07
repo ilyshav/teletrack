@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 
+#include "core/GpsFix.h"
 #include "radio/RadioMode.h"
 
 // A snapshot of what the device is doing right now. Produced by the config
@@ -20,4 +21,9 @@ struct DeviceStatus {
   uint32_t dropped = 0;
   // Non-zero while the mode button is held; drives the countdown.
   uint32_t holdMs = 0;
+  // GPS. gpsPresent is false when no receiver answered at boot, which the
+  // display shows as "NO GPS" rather than a satellite count of zero.
+  bool gpsPresent = false;
+  bool gpsTimeValid = false;
+  GpsFix gpsFix;
 };
