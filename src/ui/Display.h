@@ -1,34 +1,19 @@
 #pragma once
 
-#include <TFT_eSPI.h>
+#include <stdint.h>
 
 #include "core/DeviceStatus.h"
-#include "core/LogRing.h"
 
-// The only thing in the firmware that touches the TFT. tick() is called from
-// loop() and is the sole place that drives SPI, which is what keeps the
-// AsyncTCP task from racing the display.
+// What main.cpp holds. Two implementations exist: TftDisplay for the
+// ILI9341 on the DevKitC, OledDisplay for the SH1106 on the T-Beam. They
+// share no code -- colour SPI against monochrome I2C, 53x20 against 21x8 --
+// so this is an interface rather than a base class with behaviour.
 class Display {
  public:
-  static constexpr uint32_t kMinRedrawIntervalMs = 100;  // 10 Hz ceiling
-  static constexpr int16_t kHeaderHeight = 40;
-  static constexpr int16_t kLogLinePitch = 10;
-  static constexpr uint8_t kRotation = 1;  // landscape, 320x240
+  virtual ~Display() = default;
 
-  bool begin();
+  virtual bool begin() = 0;
 
-  // Call from loop() only.
-  void tick(uint32_t nowMs, const DeviceStatus& status);
-
- private:
-  void drawHeader(const DeviceStatus& status);
-  void drawLog();
-
-  TFT_eSPI tft_;
-  LogRing console_;  // this frame's copy, refreshed from Log::snapshot()
-  bool ready_ = false;
-  uint32_t lastDrawMs_ = 0;
-  uint32_t drawnRevision_ = 0;
-  bool headerDrawn_ = false;
-  DeviceStatus drawnStatus_;
+  // Call from loop() only. The sole place that drives the display bus.
+  virtual void tick(uint32_t nowMs, const DeviceStatus& status) = 0;
 };

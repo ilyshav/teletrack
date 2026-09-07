@@ -1,4 +1,4 @@
-#include "ui/Display.h"
+#include "ui/TftDisplay.h"
 
 #include <Arduino.h>
 #include <stdio.h>
@@ -32,7 +32,7 @@ constexpr int16_t kHeaderRightWidth = 166;
 
 }  // namespace
 
-bool Display::begin() {
+bool TftDisplay::begin() {
   tft_.init();
   tft_.setRotation(kRotation);
   tft_.fillScreen(TFT_BLACK);
@@ -48,7 +48,7 @@ bool Display::begin() {
   return true;
 }
 
-void Display::tick(uint32_t nowMs, const DeviceStatus& status) {
+void TftDisplay::tick(uint32_t nowMs, const DeviceStatus& status) {
   if (!ready_) {
     return;
   }
@@ -71,7 +71,7 @@ void Display::tick(uint32_t nowMs, const DeviceStatus& status) {
   }
 }
 
-void Display::drawHeader(const DeviceStatus& status) {
+void TftDisplay::drawHeader(const DeviceStatus& status) {
   // No fillRect here on purpose. setTextPadding makes each drawString paint its
   // own background out to a fixed width, so the new value covers the old one in
   // the same operation and the bar is never momentarily blank.
@@ -126,7 +126,7 @@ void Display::drawHeader(const DeviceStatus& status) {
   tft_.setTextDatum(TL_DATUM);
 }
 
-void Display::drawLog() {
+void TftDisplay::drawLog() {
   // console_ is this frame's private copy, taken by tick(). Drawing takes
   // ~20 ms and must never block a logging task for that long.
   tft_.setTextFont(1);  // GLCD 6x8, monospace

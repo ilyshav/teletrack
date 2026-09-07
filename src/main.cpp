@@ -13,7 +13,7 @@
 #include "core/Log.h"
 #include "radio/ModeButton.h"
 #include "radio/RadioMode.h"
-#include "ui/Display.h"
+#include "ui/TftDisplay.h"
 
 namespace {
 
@@ -55,7 +55,7 @@ struct App {
   RaceChronoGps gps;
   ModeButton button;
   ModeController modes;
-  Display display;
+  TftDisplay display;
 };
 
 App app;
