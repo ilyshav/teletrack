@@ -23,7 +23,18 @@ bool headerDiffers(const DeviceStatus& a, const DeviceStatus& b) {
          a.gpsFix.satellites != b.gpsFix.satellites ||
          a.gpsFix.fixType != b.gpsFix.fixType ||
          a.gpsFix.latE7 != b.gpsFix.latE7 || a.gpsFix.lonE7 != b.gpsFix.lonE7 ||
-         a.gpsFix.seconds != b.gpsFix.seconds;
+         a.gpsFix.seconds != b.gpsFix.seconds ||
+         // fixQuality decides between the coordinate rows and "ACQUIRING", and
+         // it can change while fixType does not: gnssFixOK going false->true
+         // with fixType already 3 takes quality 0->1. Without this the panel
+         // keeps saying ACQUIRING after the fix has arrived.
+         a.gpsFix.fixQuality != b.gpsFix.fixQuality ||
+         // Drawn on rows 3 and 4, and they drift with satellite geometry while
+         // a stationary receiver holds the same position. Comparing floats
+         // cannot cause a busy loop: tick() is already capped to 10 Hz.
+         a.gpsFix.altitudeM != b.gpsFix.altitudeM ||
+         a.gpsFix.speedKmh != b.gpsFix.speedKmh ||
+         a.gpsFix.hdop != b.gpsFix.hdop;
 }
 
 }  // namespace
