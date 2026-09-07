@@ -30,8 +30,18 @@ bool Pmu::begin() {
   g_pmu.setALDO3Voltage(3300);  // GPS -- unused in this branch, powered anyway
   g_pmu.enableALDO3();
 
+  // Charging is a hardware function of the AXP2101 and works without any of
+  // this, but the current and termination voltage would then come from
+  // whatever the chip powers up with. 4.2 V is correct for a standard 18650;
+  // the part can also be told 4.35 or 4.4 V, which suits some high-voltage
+  // cells and would overcharge a normal one. Set it rather than inherit it.
+  g_pmu.setChargeTargetVoltage(XPOWERS_AXP2101_CHG_VOL_4V2);
+  g_pmu.setChargerConstantCurr(XPOWERS_AXP2101_CHG_CUR_500MA);
+  g_pmu.enableCellbatteryCharge();
+
   present_ = true;
   Log::info("pmu", "AXP2101 up, display rail on");
+  Log::info("pmu", "charging 500mA to 4.2V");
   return true;
 }
 

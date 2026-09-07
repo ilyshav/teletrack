@@ -136,6 +136,13 @@ src/board/Pmu.h/.cpp    AXP2101 on the T-Beam; a no-op elsewhere
 `Pmu::begin()` runs in `setup()` **before** `Display::begin()`, and enables the rails the
 display and GPS sit on. On the DevKitC every method compiles to nothing.
 
+It also configures charging. The AXP2101 charges the 18650 without any firmware help —
+it is a hardware function — but the constant current and termination voltage would
+otherwise come from whatever the chip powers up with. 4.2 V is set explicitly because
+the part will also accept 4.35 V and 4.4 V, which suit high-voltage cells and would
+overcharge a standard one. Reading the battery level is **not** implemented: nothing
+displays it yet, and `getBatteryPercent()` can be wired up when something does.
+
 Keeping it as a real (if empty) module rather than an `#ifdef` in `main.cpp` means the
 ordering constraint — power before display — is visible in one place instead of implied.
 
