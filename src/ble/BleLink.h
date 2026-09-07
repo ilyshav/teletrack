@@ -15,9 +15,15 @@ class BleLink {
  public:
   // RaceChrono's published UUIDs -- not ours to choose. 16-bit assigned
   // numbers expanded against the Bluetooth base UUID.
-  static constexpr const char* kServiceUuid = "00001ff8-0000-1000-8000-00805f9b34fb";
-  static constexpr const char* kGpsMainUuid = "00000003-0000-1000-8000-00805f9b34fb";
-  static constexpr const char* kGpsTimeUuid = "00000004-0000-1000-8000-00805f9b34fb";
+  // Declared as 16-bit, not as the equivalent 128-bit base-UUID strings.
+  // Identical at the GATT level, but it changes what goes on the air: a 16-bit
+  // service UUID is advertised as AD type 0x03 in 4 bytes, where the 128-bit
+  // form is AD type 0x07 in 18 bytes. With 18 bytes plus 3 for flags there is
+  // no room left in the 31-byte advertisement for the device name, so it gets
+  // pushed into the scan response where a passive scanner never sees it.
+  static constexpr uint16_t kServiceUuid16 = 0x1FF8;
+  static constexpr uint16_t kGpsMainUuid16 = 0x0003;
+  static constexpr uint16_t kGpsTimeUuid16 = 0x0004;
 
   bool begin(const char* deviceName, TelemetryRing& ring);
   void end();

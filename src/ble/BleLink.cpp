@@ -65,15 +65,19 @@ bool BleLink::begin(const char* deviceName, TelemetryRing& ring) {
   // NimBLEDevice::deinit() on the first mode switch.
   g_server->setCallbacks(&g_callbacks, false);
 
-  NimBLEService* service = g_server->createService(kServiceUuid);
+  NimBLEService* service = g_server->createService(NimBLEUUID(kServiceUuid16));
   g_gpsMain = service->createCharacteristic(
-      kGpsMainUuid, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+      NimBLEUUID(kGpsMainUuid16), NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
   g_gpsTime = service->createCharacteristic(
-      kGpsTimeUuid, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+      NimBLEUUID(kGpsTimeUuid16), NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
   service->start();
 
   NimBLEAdvertising* advertising = NimBLEDevice::getAdvertising();
-  advertising->addServiceUUID(kServiceUuid);
+  advertising->addServiceUUID(NimBLEUUID(kServiceUuid16));
+  // The name must be in the primary advertisement, not only the scan response:
+  // a passive scanner never sends a scan request and so never sees the latter.
+  // The 16-bit UUID above leaves room for it.
+  advertising->setName(deviceName);
   advertising->setScanResponse(true);
   if (!advertising->start()) {
     // start() fails if the advertisement payload will not fit in 31 bytes,
