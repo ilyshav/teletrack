@@ -97,7 +97,17 @@ void startCurrentMode() {
   app.modes.switchComplete();
 
   // A rate change arrives through the same restart path as a rename.
-  if (app.gpsRx.present() && app.gpsRx.rateHz() != app.settings.sampleHz) {
+  //
+  // Compared against the CLAMPED rate, not the raw setting. sampleHz allows 25,
+  // which the MAX-M10S cannot do with more than one constellation, so begin()
+  // clamps it to 10 and rateHz() reports 10. Comparing the setting directly
+  // would then never match, and every mode switch and every rename would
+  // reconfigure the receiver -- each one re-running the baud probe, which
+  // blocks loop() for up to 750 ms.
+  const uint8_t wanted = app.settings.sampleHz > GpsReceiver::kMaxRateHz
+                             ? GpsReceiver::kMaxRateHz
+                             : app.settings.sampleHz;
+  if (app.gpsRx.present() && app.gpsRx.rateHz() != wanted) {
     app.gpsRx.begin(app.settings.sampleHz);
   }
 }
