@@ -84,8 +84,7 @@ delivering the first pure module.
 - Produces:
   - `enum class LogLevel : uint8_t { Debug, Info, Warn, Error }`
   - `const char* logLevelName(LogLevel)` → `"DBG" | "INF" | "WRN" | "ERR"`
-  - `void Format::uptimeShort(uint32_t ms, char* out, size_t outSize)` → `"MM:SS.d"`
-  - `void Format::uptimeLong(uint32_t ms, char* out, size_t outSize)` → `"HH:MM:SS"`
+  - `void Format::uptime(uint32_t ms, char* out, size_t outSize)` → `"HH:MM:SS"`
   - `void Format::logLine(uint32_t ms, LogLevel, const char* tag, const char* msg, char* out, size_t outSize)`
 
 - [ ] **Step 1: Replace `platformio.ini`**
@@ -199,43 +198,21 @@ static void test_level_names() {
   TEST_ASSERT_EQUAL_STRING("ERR", logLevelName(LogLevel::Error));
 }
 
-static void test_uptime_short_zero() {
+static void test_uptime_zero() {
   char buf[16];
-  Format::uptimeShort(0, buf, sizeof(buf));
-  TEST_ASSERT_EQUAL_STRING("00:00.0", buf);
+  Format::uptime(0, buf, sizeof(buf));
+  TEST_ASSERT_EQUAL_STRING("00:00:00", buf);
 }
 
-static void test_uptime_short_subsecond() {
+static void test_uptime_counts_hours_minutes_seconds() {
   char buf[16];
-  Format::uptimeShort(342, buf, sizeof(buf));
-  TEST_ASSERT_EQUAL_STRING("00:00.3", buf);
-}
-
-static void test_uptime_short_minute_rollover() {
-  char buf[16];
-  // 1 min 3.7 s
-  Format::uptimeShort(63700, buf, sizeof(buf));
-  TEST_ASSERT_EQUAL_STRING("01:03.7", buf);
-}
-
-static void test_uptime_short_wraps_at_100_minutes() {
-  char buf[16];
-  // 100 minutes exactly wraps back to zero: the short form is a fixed-width
-  // relative marker, not an absolute clock. uptimeLong() carries absolute time.
-  Format::uptimeShort(100u * 60u * 1000u, buf, sizeof(buf));
-  TEST_ASSERT_EQUAL_STRING("00:00.0", buf);
-}
-
-static void test_uptime_long_hours() {
-  char buf[16];
-  // 2 h 3 m 4 s
-  Format::uptimeLong((2u * 3600u + 3u * 60u + 4u) * 1000u, buf, sizeof(buf));
+  Format::uptime((2u * 3600u + 3u * 60u + 4u) * 1000u, buf, sizeof(buf));
   TEST_ASSERT_EQUAL_STRING("02:03:04", buf);
 }
 
-static void test_uptime_long_saturates_at_99_hours() {
+static void test_uptime_saturates_at_99_hours() {
   char buf[16];
-  Format::uptimeLong(4294967295u, buf, sizeof(buf));
+  Format::uptime(4294967295u, buf, sizeof(buf));
   TEST_ASSERT_EQUAL_STRING("99:59:59", buf);
 }
 
@@ -262,12 +239,9 @@ static void test_log_line_tolerates_null_tag_and_message() {
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_level_names);
-  RUN_TEST(test_uptime_short_zero);
-  RUN_TEST(test_uptime_short_subsecond);
-  RUN_TEST(test_uptime_short_minute_rollover);
-  RUN_TEST(test_uptime_short_wraps_at_100_minutes);
-  RUN_TEST(test_uptime_long_hours);
-  RUN_TEST(test_uptime_long_saturates_at_99_hours);
+  RUN_TEST(test_uptime_zero);
+  RUN_TEST(test_uptime_counts_hours_minutes_seconds);
+  RUN_TEST(test_uptime_saturates_at_99_hours);
   RUN_TEST(test_log_line_shape);
   RUN_TEST(test_log_line_truncates_with_tilde);
   RUN_TEST(test_log_line_tolerates_null_tag_and_message);
@@ -323,17 +297,11 @@ Note what this header does *not* include: no `Arduino.h`. That is what lets it c
 
 namespace Format {
 
-// "MM:SS.d". Minutes wrap modulo 100 so the field stays a fixed 7 characters.
-// This is a relative marker for the log console; use uptimeLong() for absolute time.
-// Needs outSize >= 8.
-void uptimeShort(uint32_t ms, char* out, size_t outSize);
+// "HH:MM:SS", hours saturating at 99.
+void uptime(uint32_t ms, char* out, size_t outSize);
 
-// "HH:MM:SS", hours saturating at 99. Needs outSize >= 9.
-void uptimeLong(uint32_t ms, char* out, size_t outSize);
-
-// "MM:SS.d [LVL] tag: msg", truncated to outSize-1 characters with a trailing '~'
-// when it does not fit. A null tag renders as "?", a null msg as empty.
-// Needs outSize >= 2.
+// "HH:MM:SS [LVL] tag: msg", truncated to outSize-1 characters with a
+// trailing '~' when it does not fit.
 void logLine(uint32_t ms, LogLevel level, const char* tag, const char* msg,
              char* out, size_t outSize);
 
@@ -349,20 +317,7 @@ void logLine(uint32_t ms, LogLevel level, const char* tag, const char* msg,
 
 namespace Format {
 
-void uptimeShort(uint32_t ms, char* out, size_t outSize) {
-  if (out == nullptr || outSize == 0) {
-    return;
-  }
-  const unsigned deci = static_cast<unsigned>((ms / 100u) % 10u);
-  const unsigned secs = static_cast<unsigned>((ms / 1000u) % 60u);
-  const unsigned mins = static_cast<unsigned>((ms / 60000u) % 100u);
-  snprintf(out, outSize, "%02u:%02u.%u", mins, secs, deci);
-}
-
-void uptimeLong(uint32_t ms, char* out, size_t outSize) {
-  if (out == nullptr || outSize == 0) {
-    return;
-  }
+void uptime(uint32_t ms, char* out, size_t outSize) {
   const uint32_t total = ms / 1000u;
   unsigned hours = static_cast<unsigned>(total / 3600u);
   unsigned mins = static_cast<unsigned>((total / 60u) % 60u);
@@ -384,7 +339,7 @@ void logLine(uint32_t ms, LogLevel level, const char* tag, const char* msg,
     return;
   }
   char stamp[9];
-  uptimeShort(ms, stamp, sizeof(stamp));
+  uptime(ms, stamp, sizeof(stamp));
 
   const int written = snprintf(out, outSize, "%s [%s] %s: %s", stamp,
                                logLevelName(level), tag != nullptr ? tag : "?",
@@ -3487,7 +3442,7 @@ void Display::drawHeader(const DeviceStatus& status) {
   tft_.drawString(right, tft_.width() - 4, 2);
 
   char stamp[9];
-  Format::uptimeLong(status.uptimeMs, stamp, sizeof(stamp));
+  Format::uptime(status.uptimeMs, stamp, sizeof(stamp));
   char lower[48];
   snprintf(lower, sizeof(lower), "up %s", stamp);
   tft_.drawString(lower, tft_.width() - 4, 20);
@@ -3798,7 +3753,7 @@ abstraction, in two rounds after Task 4:
   out to two destinations that are both known at compile time. `Log` now writes to
   serial and to the console ring directly, and owns the ring's mutex. Three files became
   one, and `Display` stopped being a log sink that also draws.
-- **`Format::uptimeShort` and deciseconds** — two time formats where one does. Log lines
+- **`Format::uptimeShort` and deciseconds** (historical) — two time formats where one does. Log lines
   now carry `HH:MM:SS`, the same stamp as the header, which also removes the
   wraps-at-100-minutes wart the short form had.
 - **`LogLevel::Debug`** — nothing in the firmware logs at debug level.
