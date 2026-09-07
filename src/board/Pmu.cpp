@@ -74,17 +74,29 @@ bool Pmu::begin() {
   g_pmu.setChargerConstantCurr(XPOWERS_AXP2101_CHG_CUR_500MA);
   g_pmu.enableCellbatteryCharge();
 
-  // The OLED answers I2C without any of this, because these modules power the
-  // controller logic and the panel separately: VDD runs the I2C interface,
-  // VCC feeds the charge pump that actually lights the glass. That is how the
-  // display can ACK at 0x3C, have u8g2.begin() succeed, and still show
-  // nothing. Report what each rail is doing so the right one is identifiable.
-  Log::info("pmu", "ALDO1=%umV ALDO2=%umV ALDO3=%umV ALDO4=%umV",
-            (unsigned)g_pmu.getALDO1Voltage(), (unsigned)g_pmu.getALDO2Voltage(),
-            (unsigned)g_pmu.getALDO3Voltage(), (unsigned)g_pmu.getALDO4Voltage());
-  Log::info("pmu", "DC1=%umV BLDO1=%umV BLDO2=%umV",
-            (unsigned)g_pmu.getDC1Voltage(), (unsigned)g_pmu.getBLDO1Voltage(),
-            (unsigned)g_pmu.getBLDO2Voltage());
+  // getXVoltage() reports the CONFIGURED voltage, not whether the rail is
+  // switched on -- every rail reading 3300 mV told us nothing. Log the enable
+  // state, which is the thing that matters.
+  Log::info("pmu", "before: ALDO1=%d ALDO2=%d ALDO3=%d ALDO4=%d BLDO1=%d BLDO2=%d",
+            g_pmu.isEnableALDO1(), g_pmu.isEnableALDO2(), g_pmu.isEnableALDO3(),
+            g_pmu.isEnableALDO4(), g_pmu.isEnableBLDO1(), g_pmu.isEnableBLDO2());
+
+  // Which rail feeds the OLED panel is still unknown, and the panel supply is
+  // separate from the controller logic the I2C scan saw. Rather than guess a
+  // fourth time, switch every LDO on: they all carry voltages this board
+  // configured for itself, and they feed the display, LoRa, GPS and sensors.
+  // Once the screen lights up, the enable-state log above identifies which one
+  // was off and the rest can be dropped.
+  g_pmu.enableALDO1();
+  g_pmu.enableALDO2();
+  g_pmu.enableALDO3();
+  g_pmu.enableALDO4();
+  g_pmu.enableBLDO1();
+  g_pmu.enableBLDO2();
+
+  Log::info("pmu", "after:  ALDO1=%d ALDO2=%d ALDO3=%d ALDO4=%d BLDO1=%d BLDO2=%d",
+            g_pmu.isEnableALDO1(), g_pmu.isEnableALDO2(), g_pmu.isEnableALDO3(),
+            g_pmu.isEnableALDO4(), g_pmu.isEnableBLDO1(), g_pmu.isEnableBLDO2());
 
   present_ = true;
   Log::info("pmu", "AXP2101 up");

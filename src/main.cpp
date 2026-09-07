@@ -195,8 +195,13 @@ void setup() {
     Log::error("pmu", "power management failed to start");
   }
 
+  // The panel's charge pump needs a moment after its rail comes up before it
+  // will accept initialisation.
+  delay(100);
   if (!app.display.begin()) {
     Log::error("display", "init failed, serial only");
+  } else {
+    Log::info("display", "init ok");
   }
 
   app.button.begin();
