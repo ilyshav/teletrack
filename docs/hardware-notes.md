@@ -235,6 +235,29 @@ advertising->setName(deviceName);
 16-bit and base-UUID 128-bit are identical at the GATT level, so clients still resolve
 the service the same way. Only the bytes on the air change.
 
+### RaceChrono connects, then drops about a second later, over and over
+
+**Symptom:** `ble: connected` / `ble: disconnected, advertising again` cycling
+roughly once a second. RaceChrono never stays on long enough to show a lock, so
+it reports no satellites regardless of what the GPS is doing. Seen on **both**
+boards, which is what rules out anything board-specific.
+
+**Cause:** the peripheral asked for connection parameters no phone will accept.
+`updateConnParams(handle, 6, 12, 0, 200)` requests a 7.5 ms minimum interval and
+a 15 ms maximum. Apple's Accessory Design Guidelines require **interval min >=
+15 ms** and **interval max >= interval min + 15 ms**; this violates both, and it
+is sent on every connect. Android rejects out-of-range requests too.
+
+**Fix:** `updateConnParams(handle, 12, 24, 0, 400)` -- 15 ms to 30 ms, 4 s
+supervision timeout. 15 ms still carries 66 notifications a second against the
+25 the device sends at its fastest.
+
+The MTU-517 and 2M-PHY calls went at the same time. All three were sized for a
+30 kB/s target that died when the consumer became RaceChrono, which takes one
+fix per notification -- 500 B/s at 25 Hz. The reference implementation does none
+of them, and each one is a deviation that can fail against a central we do not
+control.
+
 ### NimBLE version
 
 Pin **`h2zero/NimBLE-Arduino@^1.4.3`**. The 2.x line requires Arduino core 3.x / ESP-IDF

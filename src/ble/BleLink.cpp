@@ -20,9 +20,13 @@ uint16_t g_mtu = 23;
 class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer* server, ble_gap_conn_desc* desc) override {
     g_connected = true;
-    // Ask for the shortest interval the client will accept: throughput is
-    // packets-per-interval, so the interval is the dominant term.
-    server->updateConnParams(desc->conn_handle, 6, 12, 0, 200);
+    // 12 and 24 are 15 ms and 30 ms. These are the floor Apple's Accessory
+    // Design Guidelines allow -- interval min >= 15 ms, and interval max at
+    // least 15 ms above it -- and Android rejects out-of-range requests too.
+    // The previous 6/12 asked for 7.5 ms and violated both rules, on every
+    // connect, which is what a central refuses by dropping the link.
+    // 15 ms still carries 66 notifications a second against the 25 we send.
+    server->updateConnParams(desc->conn_handle, 12, 24, 0, 400);
     Log::info("ble", "connected");
   }
 
@@ -47,12 +51,11 @@ bool BleLink::begin(const char* deviceName, TelemetryRing& ring) {
   ring_ = &ring;
 
   NimBLEDevice::init(deviceName);
-  NimBLEDevice::setMTU(517);
-  // 2M PHY doubles the symbol rate; without it the budget does not close.
-  // NimBLE-Arduino 1.4.3 has no NimBLEDevice::setDefaultPhy wrapper (that
-  // came later, in the 2.x line) so this calls the underlying NimBLE host
-  // function it would otherwise wrap.
-  ble_gap_set_prefered_default_le_phy(BLE_GAP_LE_PHY_2M_MASK, BLE_GAP_LE_PHY_2M_MASK);
+  // No setMTU and no 2M PHY. Both were sized for a 30 kB/s target that died
+  // when the consumer became RaceChrono, which takes one fix per notify --
+  // 500 B/s at 25 Hz, inside the default MTU and the 1M PHY. The reference
+  // implementation does neither, and every deviation from it here is
+  // something that can go wrong with a central we do not control.
 
   g_server = NimBLEDevice::createServer();
   if (g_server == nullptr) {
