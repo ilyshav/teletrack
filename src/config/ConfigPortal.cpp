@@ -1,6 +1,7 @@
 #include "config/ConfigPortal.h"
 
 #include <Arduino.h>
+#include <WiFi.h>
 
 #include "core/Log.h"
 
@@ -43,4 +44,12 @@ DeviceStatus ConfigPortal::status() const {
   s.freeHeap = ESP.getFreeHeap();
   s.apUp = ap_.up();
   return s;
+}
+
+void ConfigPortal::end() {
+  server_.end();
+  portal_.end();
+  WiFi.softAPdisconnect(true);
+  WiFi.mode(WIFI_OFF);
+  Log::info("ap", "stopped");
 }

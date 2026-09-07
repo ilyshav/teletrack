@@ -32,6 +32,10 @@ class ConfigPortal {
   // Call from loop().
   void tick(uint32_t nowMs);
 
+  // Tears down HTTP, DNS and the access point. Safe to call when never begun,
+  // and safe to call twice.
+  void end();
+
   DeviceStatus status() const;
 
  private:

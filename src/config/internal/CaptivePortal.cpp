@@ -54,3 +54,10 @@ void CaptivePortal::registerRoutes(AsyncWebServer& server) {
     request->redirect(kPortalUrl);
   });
 }
+
+void CaptivePortal::end() {
+  if (up_) {
+    dns_.stop();
+    up_ = false;
+  }
+}
