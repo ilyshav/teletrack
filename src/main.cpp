@@ -26,7 +26,7 @@ void setup() {
     Log::error("tft", "display init failed, serial only");
   }
 
-  Log::info("boot", "teletrack phase 1");
+  Log::info("boot", "teletrack");
 
   if (!app.portal.begin()) {
     Log::error("boot", "config portal failed to start");
