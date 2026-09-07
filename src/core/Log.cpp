@@ -38,6 +38,12 @@ void emit(LogLevel level, const char* tag, const char* fmt, va_list args) {
 void begin(unsigned long baud) {
   g_mutex = xSemaphoreCreateMutex();
   Serial.begin(baud);
+  // USB CDC blocks for tx_timeout_ms (250 by default) when the host is not
+  // draining the buffer, and that stall lands on whichever task happened to
+  // log. A log line is never worth stalling a task for a quarter second --
+  // least of all the BLE host task, which has a connection to service. Zero
+  // makes a write that cannot fit drop instead of wait.
+  Serial.setTxTimeoutMs(0);
 }
 
 void info(const char* tag, const char* fmt, ...) {

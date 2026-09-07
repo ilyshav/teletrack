@@ -22,6 +22,11 @@ class BleLink {
   // no room left in the 31-byte advertisement for the device name, so it gets
   // pushed into the scan response where a passive scanner never sees it.
   static constexpr uint16_t kServiceUuid16 = 0x1FF8;
+  // The CAN half of the profile. This device has no CAN bus, but RaceChrono
+  // configures a DIY device by writing a filter command to 0x0002 on connect,
+  // and a device missing it is one it cannot set up.
+  static constexpr uint16_t kCanMainUuid16 = 0x0001;
+  static constexpr uint16_t kCanFilterUuid16 = 0x0002;
   static constexpr uint16_t kGpsMainUuid16 = 0x0003;
   static constexpr uint16_t kGpsTimeUuid16 = 0x0004;
 

@@ -17,29 +17,64 @@ NimBLECharacteristic* g_gpsTime = nullptr;
 bool g_connected = false;
 uint16_t g_mtu = 23;
 
+// Set by the callbacks, drained by tick(). The callbacks run on the NimBLE
+// host task, and logging there puts a USB CDC write -- which can drop or
+// stall -- in the middle of connection handling. Flag it and let loop() do
+// the talking.
+// What RaceChrono last wrote to the CAN filter characteristic, drained by
+// tick(). Recording it answers a question we could not otherwise ask: whether
+// the app talks to that characteristic at all.
+uint8_t g_filterCmd = 0;
+bool g_filterWritten = false;
+
+bool g_logConnected = false;
+bool g_logDisconnected = false;
+uint16_t g_logMtu = 0;
+
 class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer* server, ble_gap_conn_desc* desc) override {
     g_connected = true;
-    // Ask for the shortest interval the client will accept: throughput is
-    // packets-per-interval, so the interval is the dominant term.
-    server->updateConnParams(desc->conn_handle, 6, 12, 0, 200);
-    Log::info("ble", "connected");
+    // 12 and 24 are 15 ms and 30 ms. These are the floor Apple's Accessory
+    // Design Guidelines allow -- interval min >= 15 ms, and interval max at
+    // least 15 ms above it -- and Android rejects out-of-range requests too.
+    // The previous 6/12 asked for 7.5 ms and violated both rules, on every
+    // connect, which is what a central refuses by dropping the link.
+    // 15 ms still carries 66 notifications a second against the 25 we send.
+    server->updateConnParams(desc->conn_handle, 12, 24, 0, 400);
+    g_logConnected = true;
   }
 
   void onDisconnect(NimBLEServer* server) override {
     g_connected = false;
     g_mtu = 23;
-    Log::info("ble", "disconnected, advertising again");
-    NimBLEDevice::startAdvertising();
+    g_logDisconnected = true;
+    // No startAdvertising() here: NimBLEServer::m_advertiseOnDisconnect
+    // defaults to true and the stack restarts it for us the moment this
+    // callback returns. Doing it again just fails with EALREADY.
   }
 
   void onMTUChange(uint16_t mtu, ble_gap_conn_desc* desc) override {
     g_mtu = mtu;
-    Log::info("ble", "mtu %u", (unsigned)mtu);
+    g_logMtu = mtu;
   }
 };
 
 ServerCallbacks g_callbacks;
+
+// Accepts and ignores the filter commands: deny-all (0), allow-all (1) and
+// allow-one-PID (2) all mean the same thing to a device with no CAN bus. What
+// matters is that the write succeeds, so the app can finish configuring.
+class FilterCallbacks : public NimBLECharacteristicCallbacks {
+  void onWrite(NimBLECharacteristic* characteristic) override {
+    const std::string value = characteristic->getValue();
+    if (!value.empty()) {
+      g_filterCmd = static_cast<uint8_t>(value[0]);
+      g_filterWritten = true;
+    }
+  }
+};
+
+FilterCallbacks g_filterCallbacks;
 
 }  // namespace
 
@@ -47,12 +82,11 @@ bool BleLink::begin(const char* deviceName, TelemetryRing& ring) {
   ring_ = &ring;
 
   NimBLEDevice::init(deviceName);
-  NimBLEDevice::setMTU(517);
-  // 2M PHY doubles the symbol rate; without it the budget does not close.
-  // NimBLE-Arduino 1.4.3 has no NimBLEDevice::setDefaultPhy wrapper (that
-  // came later, in the 2.x line) so this calls the underlying NimBLE host
-  // function it would otherwise wrap.
-  ble_gap_set_prefered_default_le_phy(BLE_GAP_LE_PHY_2M_MASK, BLE_GAP_LE_PHY_2M_MASK);
+  // No setMTU and no 2M PHY. Both were sized for a 30 kB/s target that died
+  // when the consumer became RaceChrono, which takes one fix per notify --
+  // 500 B/s at 25 Hz, inside the default MTU and the 1M PHY. The reference
+  // implementation does neither, and every deviation from it here is
+  // something that can go wrong with a central we do not control.
 
   g_server = NimBLEDevice::createServer();
   if (g_server == nullptr) {
@@ -66,6 +100,18 @@ bool BleLink::begin(const char* deviceName, TelemetryRing& ring) {
   g_server->setCallbacks(&g_callbacks, false);
 
   NimBLEService* service = g_server->createService(NimBLEUUID(kServiceUuid16));
+
+  // The CAN characteristics come first, in the order the reference declares
+  // them. Nothing is ever notified on 0x0001 -- there is no CAN bus here --
+  // but both must exist for RaceChrono to finish setting the device up.
+  service->createCharacteristic(NimBLEUUID(kCanMainUuid16),
+                                NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+  NimBLECharacteristic* filter = service->createCharacteristic(
+      NimBLEUUID(kCanFilterUuid16), NIMBLE_PROPERTY::WRITE);
+  // Not owned: NimBLECharacteristic's destructor does not delete its
+  // callbacks, unlike NimBLEServer's, so a static object is safe here.
+  filter->setCallbacks(&g_filterCallbacks);
+
   g_gpsMain = service->createCharacteristic(
       NimBLEUUID(kGpsMainUuid16), NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
   g_gpsTime = service->createCharacteristic(
@@ -108,6 +154,26 @@ void BleLink::tick(uint32_t nowMs) {
   (void)nowMs;
   connected_ = g_connected;
   mtu_ = g_mtu;
+
+  // The callbacks only raise flags; the logging happens here, on loop(), so a
+  // slow serial host can never delay connection handling.
+  if (g_logConnected) {
+    g_logConnected = false;
+    Log::info("ble", "connected");
+  }
+  if (g_logDisconnected) {
+    g_logDisconnected = false;
+    Log::info("ble", "disconnected, advertising again");
+  }
+  if (g_filterWritten) {
+    g_filterWritten = false;
+    Log::info("ble", "racechrono wrote filter command %u",
+              static_cast<unsigned>(g_filterCmd));
+  }
+  if (g_logMtu != 0) {
+    Log::info("ble", "mtu %u", (unsigned)g_logMtu);
+    g_logMtu = 0;
+  }
 
   if (!connected_ || ring_ == nullptr || g_gpsMain == nullptr) {
     return;

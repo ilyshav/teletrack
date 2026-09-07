@@ -113,6 +113,62 @@ Buttons need no external resistor — `pinMode(pin, INPUT_PULLUP)` and wire to g
 
 ---
 
+## T-Beam Supreme power rails
+
+From LilyGO's own board support (Xinyuan-LilyGO/LilyGo-LoRa-Series,
+`examples/.../LoRaBoards.cpp`), not from guesswork:
+
+| Rail | Feeds |
+| --- | --- |
+| ALDO1 | sensors (magnetometer, BME280) |
+| ALDO2 | SD card |
+| ALDO3 | LoRa |
+| **ALDO4** | **GPS** |
+| VBACKUP | GNSS RTC backup — without it every start is a cold start |
+| DCDC1 | ESP32 VDD — protected, never disable |
+
+**The display is on none of them.** An earlier version of `Pmu.cpp` labelled
+ALDO2 "display" and ALDO3 "GPS"; both were wrong, and hours went into power
+theories for a dark panel whose actual fault was an I2C address collision.
+
+### GPS pins
+
+`GPS_RX_PIN 9`, `GPS_TX_PIN 8` (ESP32 side), `GPS_EN_PIN 7`, `GPS_PPS_PIN 6`.
+LilyGO's code never drives GPS_EN or PPS, so neither does ours.
+
+### 25 Hz needs a single constellation
+
+The MAX-M10S datasheet's headline rate is 25 Hz, but that is **GPS-only**. With
+several constellations running concurrently the ceiling is 10 Hz, and the receiver
+will not accept a faster rate while they are enabled.
+
+`GpsReceiver::begin()` therefore writes the constellation set before the rate:
+above 10 Hz it enables GPS and disables Galileo, BeiDou, GLONASS, SBAS and QZSS;
+at or below 10 Hz it switches them all back on. Writing the set explicitly in both
+directions matters — otherwise dropping the rate after a 25 Hz run would leave the
+receiver quietly GPS-only.
+
+Fewer constellations means fewer satellites in view and worse accuracy where sky
+view is poor. That is the trade 25 Hz buys, and the boot log says when it is made.
+
+### The GPS baud rate is not knowable in advance
+
+LilyGO's board support defines `GPS_BAUD_RATE 9600`, u-blox M10 modules leave
+the factory at 38400, and LilyGO ship a recovery sketch that sweeps
+`{9600, 19200, 38400, 57600, 115200, ...}` precisely because it varies in the
+field. Our own firmware sets 115200 in the RAM layer, which survives a warm
+reset but not a power cycle.
+
+`GpsReceiver::begin()` therefore probes 115200, then 38400, then 9600, for
+250 ms each, and logs which answered. A silent receiver logs
+`gps: no response at any baud` and everything else carries on.
+
+Configuration goes to the **RAM layer only** (`CFG-VALSET layers = 0x01`), so
+the module is never permanently altered and a power cycle returns it to its
+own defaults.
+
+---
+
 ## Serial
 
 ### Reading the port yourself returns zero bytes
@@ -178,6 +234,96 @@ advertising->setName(deviceName);
 
 16-bit and base-UUID 128-bit are identical at the GATT level, so clients still resolve
 the service the same way. Only the bytes on the air change.
+
+### RaceChrono connects, then drops about a second later, over and over
+
+**Symptom:** `ble: connected` / `ble: disconnected, advertising again` cycling
+roughly once a second. RaceChrono never stays on long enough to show a lock, so
+it reports no satellites regardless of what the GPS is doing. Seen on **both**
+boards, which is what rules out anything board-specific.
+
+**Cause:** the peripheral asked for connection parameters no phone will accept.
+`updateConnParams(handle, 6, 12, 0, 200)` requests a 7.5 ms minimum interval and
+a 15 ms maximum. Apple's Accessory Design Guidelines require **interval min >=
+15 ms** and **interval max >= interval min + 15 ms**; this violates both, and it
+is sent on every connect. Android rejects out-of-range requests too.
+
+**Fix:** `updateConnParams(handle, 12, 24, 0, 400)` -- 15 ms to 30 ms, 4 s
+supervision timeout. 15 ms still carries 66 notifications a second against the
+25 the device sends at its fastest.
+
+The MTU-517 and 2M-PHY calls went at the same time. All three were sized for a
+30 kB/s target that died when the consumer became RaceChrono, which takes one
+fix per notification -- 500 B/s at 25 Hz. The reference implementation does none
+of them, and each one is a deviation that can fail against a central we do not
+control.
+
+### Log lines arrive truncated, and BLE drops around the same time
+
+**Symptom:** serial shows partial lines -- `00:00:35 [INF] b`, `00:00:40 [INF]`
+with nothing after, a line starting mid-timestamp -- alongside a connect/drop
+cycle.
+
+**Cause:** `USBCDC::tx_timeout_ms` defaults to **250 ms**. When the host is not
+draining the buffer, `Serial.write` blocks that long and then returns short,
+which is what cuts a line in half. Whichever task called the logger wears the
+stall -- and `NimBLEServerCallbacks::onConnect`/`onDisconnect` run on the
+**NimBLE host task**, so a log line there stalls connection handling by a
+quarter second at exactly the moment a central is discovering services.
+
+**Fix, two parts:**
+- `Serial.setTxTimeoutMs(0)` in `Log::begin()`. A log line is never worth
+  stalling a task for; a write that will not fit now drops instead of waiting.
+- The BLE callbacks set flags and `BleLink::tick()` does the logging, on
+  `loop()`. Nothing on the host task touches serial.
+
+**Also removed:** the explicit `startAdvertising()` in `onDisconnect`.
+`NimBLEServer::m_advertiseOnDisconnect` defaults to true, so the stack restarts
+advertising itself as soon as the callback returns; calling it again just fails
+with `EALREADY`.
+
+### RaceChrono connects and drops every two seconds, with no data in between
+
+**Symptom:** a metronomic `connected` / `disconnected, advertising again` cycle
+about two seconds apart, on both boards, with the GPS reporting 0 satellites.
+
+**Cause:** the firmware was withholding every packet until the receiver reported
+`validDate && validTime`. Indoors the receiver never resolves time, so nothing was
+ever sent. RaceChrono subscribes, waits, receives nothing, and drops the link —
+which is reasonable behaviour on its part.
+
+**Fix:** send the fix regardless. A packet with `fixQuality = 0` says "still
+acquiring" and keeps the client connected while the receiver works; silence says
+nothing and reads as a dead device. This is what the reference implementation
+does, and departing from it was the mistake.
+
+**Related:** HDOP is one byte holding `dop * 10`, so 0.0 to 25.4, with 0xFF meaning
+invalid. A u-blox receiver with no fix reports pDOP 99.99, which encoded naively
+wraps to 232 and reads as a confident 23.2. It is clamped to 0xFF now. This never
+showed up while the synthetic fix hardcoded `hdop = 1.0`.
+
+### RaceChrono drops the link but nRF Connect stays connected
+
+That asymmetry is the whole diagnosis: a generic central holds the connection
+happily, so the BLE stack is fine and RaceChrono is hanging up on purpose.
+
+**Cause:** the device exposed only the GPS half of the profile. The reference
+implementation declares four characteristics on service 0x1FF8 --
+`0x0001` CAN main (READ|NOTIFY), `0x0002` CAN filter (WRITE), `0x0003` GPS main,
+`0x0004` GPS time. RaceChrono configures a DIY device by **writing a filter
+command to 0x0002 on connect**, and against a device where that characteristic
+does not exist the write fails and the app gives up.
+
+The spec text says a device may implement whichever features it wants, which is
+what made omitting them look safe. It is not, for the connect handshake.
+
+**Fix:** declare both CAN characteristics. `0x0001` is never notified -- there is
+no CAN bus on this device -- and the `0x0002` write handler accepts and ignores
+every command, since deny-all, allow-all and allow-one-PID all mean the same
+thing with no bus. What matters is that the write succeeds.
+
+The handler logs the command byte it received, so the boot log now says whether
+RaceChrono talks to that characteristic at all.
 
 ### NimBLE version
 

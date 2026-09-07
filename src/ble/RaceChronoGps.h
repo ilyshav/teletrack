@@ -2,25 +2,7 @@
 
 #include <stdint.h>
 
-// A GPS fix in plain units. Phase 3 fills this from a real receiver; Phase 2
-// fills it with a moving synthetic fix (see main.cpp).
-struct GpsFix {
-  int32_t latE7 = 0;         // degrees * 10,000,000, signed
-  int32_t lonE7 = 0;         // degrees * 10,000,000, signed
-  float altitudeM = 0.0f;
-  float speedKmh = 0.0f;
-  float bearingDeg = 0.0f;
-  float hdop = 0.0f;
-  uint8_t fixQuality = 0;
-  uint8_t satellites = 0;
-  uint16_t year = 2000;
-  uint8_t month = 1;
-  uint8_t day = 1;
-  uint8_t hour = 0;
-  uint8_t minute = 0;
-  uint8_t seconds = 0;
-  uint16_t millis = 0;
-};
+#include "core/GpsFix.h"
 
 // Encodes GpsFix into RaceChrono's BLE DIY GPS characteristics (UUIDs 0x0003
 // and 0x0004 of service 0x1FF8; see docs/reference/racechrono/PROTOCOL.md).

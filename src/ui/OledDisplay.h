@@ -4,19 +4,17 @@
 
 #include "board/BoardConfig.h"
 #include "core/DeviceStatus.h"
-#include "core/LogRing.h"
 #include "ui/Display.h"
 
 // SH1106 128x64 over I2C. At the 6x8 font that is 21 columns by 8 rows: one
-// header row in inverse video, then the seven most recent log lines truncated
-// to fit. On 21 columns every row spent on chrome is a row of log lost, so the
-// header carries only what changes -- state, its one relevant count, uptime.
+// header row in inverse video, then rows of GPS status. The scrolling
+// log that used to live here is gone -- on 21 columns it showed six useful
+// characters per line, and serial carries the full log with timestamps.
 class OledDisplay : public Display {
  public:
   static constexpr uint32_t kMinRedrawIntervalMs = 100;  // 10 Hz ceiling
   static constexpr size_t kCols = 21;
   static constexpr size_t kHeaderRows = 1;
-  static constexpr size_t kLogRows = 7;
   static constexpr int16_t kRowHeight = 8;
 
   // 0x3C is the SSD1306/SH1106 default, but on T-Beam Supreme V3 the QMC6310N
@@ -37,10 +35,8 @@ class OledDisplay : public Display {
   U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2_{U8G2_R0, U8X8_PIN_NONE,
                                            BoardConfig::kI2cScl,
                                            BoardConfig::kI2cSda};
-  LogRing console_;  // this frame's copy, refreshed from Log::snapshot()
   bool ready_ = false;
   uint32_t lastDrawMs_ = 0;
-  uint32_t drawnRevision_ = 0;
   DeviceStatus drawnStatus_;
   bool drawnOnce_ = false;
 };

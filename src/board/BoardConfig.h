@@ -26,6 +26,14 @@ inline constexpr uint8_t kI2cScl = 18;
 inline constexpr uint8_t kPmuSda = 42;
 inline constexpr uint8_t kPmuScl = 41;
 
+// u-blox MAX-M10S UART, from LilyGO's own board support for this board.
+// Named from the ESP32's point of view: kGpsRxPin receives the module's TX.
+inline constexpr uint8_t kGpsRxPin = 9;
+inline constexpr uint8_t kGpsTxPin = 8;
+// GPIO 7 is GPS_EN and GPIO 6 is PPS. LilyGO's own code drives neither, so
+// neither is defined here. If the receiver is silent at every baud with
+// ALDO4 confirmed on, GPIO 7 is the first thing to try.
+
 #elif defined(BOARD_DEVKITC)
 
 inline constexpr const char* kBoardName = "ESP32-S3-DevKitC-1";

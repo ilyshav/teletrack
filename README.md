@@ -3,6 +3,11 @@
 DIY trackday telemetry logger. ESP32-S3 with a u-blox M10N GPS module and a 320×240
 ILI9341 display.
 
+On the T-Beam Supreme, the firmware reads the board's onboard u-blox MAX-M10S over
+UBX-NAV-PVT at the rate set in the web UI, and reports satellite count and fix state
+on the OLED and to RaceChrono over BLE. The DevKitC has no receiver attached, so it
+emits a synthetic fix instead, keeping BLE testable indoors.
+
 ## Status
 
 **Phase 1 — configuration portal.** The device opens an open WiFi access point,

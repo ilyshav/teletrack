@@ -3,7 +3,6 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <stdio.h>
-#include <string.h>
 
 #include "board/BoardConfig.h"
 #include "core/Format.h"
@@ -19,7 +18,23 @@ bool headerDiffers(const DeviceStatus& a, const DeviceStatus& b) {
   return a.clients != b.clients || a.apUp != b.apUp || a.mode != b.mode ||
          a.bleConnected != b.bleConnected || a.dropped != b.dropped ||
          (a.holdMs / 100u) != (b.holdMs / 100u) ||
-         (a.uptimeMs / 1000u) != (b.uptimeMs / 1000u);
+         (a.uptimeMs / 1000u) != (b.uptimeMs / 1000u) ||
+         a.gpsPresent != b.gpsPresent || a.gpsTimeValid != b.gpsTimeValid ||
+         a.gpsFix.satellites != b.gpsFix.satellites ||
+         a.gpsFix.fixType != b.gpsFix.fixType ||
+         a.gpsFix.latE7 != b.gpsFix.latE7 || a.gpsFix.lonE7 != b.gpsFix.lonE7 ||
+         a.gpsFix.seconds != b.gpsFix.seconds ||
+         // fixQuality decides between the coordinate rows and "ACQUIRING", and
+         // it can change while fixType does not: gnssFixOK going false->true
+         // with fixType already 3 takes quality 0->1. Without this the panel
+         // keeps saying ACQUIRING after the fix has arrived.
+         a.gpsFix.fixQuality != b.gpsFix.fixQuality ||
+         // Drawn on rows 3 and 4, and they drift with satellite geometry while
+         // a stationary receiver holds the same position. Comparing floats
+         // cannot cause a busy loop: tick() is already capped to 10 Hz.
+         a.gpsFix.altitudeM != b.gpsFix.altitudeM ||
+         a.gpsFix.speedKmh != b.gpsFix.speedKmh ||
+         a.gpsFix.hdop != b.gpsFix.hdop;
 }
 
 }  // namespace
@@ -68,15 +83,8 @@ void OledDisplay::tick(uint32_t nowMs, const DeviceStatus& status) {
   }
   lastDrawMs_ = nowMs;
 
-  const uint32_t revision = Log::revision();
-  const bool logChanged = revision != drawnRevision_;
-  const bool headerChanged = !drawnOnce_ || headerDiffers(status, drawnStatus_);
-  if (!logChanged && !headerChanged) {
+  if (drawnOnce_ && !headerDiffers(status, drawnStatus_)) {
     return;
-  }
-  if (logChanged) {
-    Log::snapshot(console_);
-    drawnRevision_ = revision;
   }
 
   draw(status);
@@ -121,25 +129,68 @@ void OledDisplay::draw(const DeviceStatus& status) {
   u8g2_.drawStr(128 - 1 - u8g2_.getStrWidth(stamp), kRowHeight - 1, stamp);
   u8g2_.setDrawColor(1);
 
-  // The newest kLogRows lines from a ring that holds more. LogRing::row(0) is
-  // the oldest, so start kLogRows back from the end.
-  for (size_t i = 0; i < kLogRows; ++i) {
-    const size_t src = LogRing::kRows - kLogRows + i;
-    // LogRing rows are the full serial line, "HH:MM:SS [INF] tag: msg". The
-    // stamp and level cost 15 of the 21 columns here and say nothing the
-    // serial log does not already carry, so skip past them to the message.
-    const char* full = console_.row(src);
-    const char* body = strstr(full, "] ");
-    body = (body != nullptr) ? body + 2 : full;
+  // Row 1: satellite count and fix state. The count is the number that
+  // answers "is this thing working yet", so it is always on the left.
+  char line[kCols + 1];
+  const GpsFix& fix = status.gpsFix;
 
-    char line[kCols + 1];
-    snprintf(line, sizeof(line), "%s", body);
-    if (strlen(body) > kCols) {
-      line[kCols - 1] = '~';  // same truncation mark LogRing itself uses
-    }
-    const int16_t y =
-        static_cast<int16_t>((kHeaderRows + i + 1) * kRowHeight - 1);
-    u8g2_.drawStr(1, y, line);
+  char sats[12];
+  if (!status.gpsPresent) {
+    snprintf(sats, sizeof(sats), "SATS --");
+  } else {
+    snprintf(sats, sizeof(sats), "SATS %02u", static_cast<unsigned>(fix.satellites));
+  }
+
+  const char* state = !status.gpsPresent ? "NO GPS"
+                      : fix.fixType == 3 ? "3D FIX"
+                      : fix.fixType == 2 ? "2D FIX"
+                                         : "NO FIX";
+
+  // Status row n, counting from 0 immediately below the header.
+  auto row = [this](size_t n) {
+    return static_cast<int16_t>((kHeaderRows + n + 1) * kRowHeight - 1);
+  };
+
+  u8g2_.drawStr(1, row(0), sats);
+  u8g2_.drawStr(128 - 1 - u8g2_.getStrWidth(state), row(0), state);
+
+  // Formatted with integer arithmetic throughout. Nothing else in this
+  // firmware printf()s a float, and whether %f works at all depends on which
+  // newlib variant the core was built with -- not a thing to discover on a
+  // screen at a track day.
+  if (status.gpsPresent && fix.fixQuality > 0) {
+    const char* latSign = fix.latE7 < 0 ? "-" : "";
+    const uint32_t latAbs = static_cast<uint32_t>(fix.latE7 < 0 ? -fix.latE7 : fix.latE7);
+    snprintf(line, sizeof(line), "LAT %s%lu.%05lu", latSign,
+             static_cast<unsigned long>(latAbs / 10000000UL),
+             static_cast<unsigned long>((latAbs % 10000000UL) / 100UL));
+    u8g2_.drawStr(1, row(1), line);
+
+    const char* lonSign = fix.lonE7 < 0 ? "-" : "";
+    const uint32_t lonAbs = static_cast<uint32_t>(fix.lonE7 < 0 ? -fix.lonE7 : fix.lonE7);
+    snprintf(line, sizeof(line), "LON %s%lu.%05lu", lonSign,
+             static_cast<unsigned long>(lonAbs / 10000000UL),
+             static_cast<unsigned long>((lonAbs % 10000000UL) / 100UL));
+    u8g2_.drawStr(1, row(2), line);
+
+    const unsigned dop = static_cast<unsigned>(fix.hdop * 10.0f + 0.5f);
+    snprintf(line, sizeof(line), "ALT %dm DOP %u.%u", static_cast<int>(fix.altitudeM),
+             dop / 10u, dop % 10u);
+    u8g2_.drawStr(1, row(3), line);
+
+    const unsigned speed = static_cast<unsigned>(fix.speedKmh * 10.0f + 0.5f);
+    snprintf(line, sizeof(line), "SPD %u.%u km/h", speed / 10u, speed % 10u);
+    u8g2_.drawStr(1, row(4), line);
+  } else if (status.gpsPresent) {
+    u8g2_.drawStr(1, row(1), "ACQUIRING");
+  }
+
+  // UTC last, and only once the receiver says its clock is trustworthy --
+  // that flag is also what gates transmission to RaceChrono.
+  if (status.gpsTimeValid) {
+    snprintf(line, sizeof(line), "UTC %02u:%02u:%02u", static_cast<unsigned>(fix.hour),
+             static_cast<unsigned>(fix.minute), static_cast<unsigned>(fix.seconds));
+    u8g2_.drawStr(1, row(5), line);
   }
 
   u8g2_.sendBuffer();

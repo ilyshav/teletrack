@@ -25,13 +25,18 @@ bool Pmu::begin() {
     return false;
   }
 
-  // The board powers these up on its own -- every rail read as already enabled
-  // before this ran -- so this sets the voltages rather than rescuing a dark
-  // panel. A dark screen here is an I2C address problem, not a power one.
-  g_pmu.setALDO2Voltage(3300);  // display
-  g_pmu.enableALDO2();
-  g_pmu.setALDO3Voltage(3300);  // GPS -- unused in this branch, powered anyway
-  g_pmu.enableALDO3();
+  // Rail map for the T-Beam S3 Supreme, from LilyGO's own board support:
+  //   ALDO1 sensors   ALDO2 SD card   ALDO3 LoRa   ALDO4 GPS
+  //   VBACKUP GNSS RTC   DCDC1 ESP32 VDD (protected, never disable)
+  // The earlier labels here said ALDO2 was the display and ALDO3 the GPS.
+  // Both were wrong. The display is on none of them, which is why the dark
+  // panel turned out to be an I2C address problem rather than a power one.
+  g_pmu.setALDO4Voltage(3300);
+  g_pmu.enableALDO4();
+  // Keeps the GNSS RTC and its almanac alive across power cycles. Without it
+  // every start is a cold start: minutes to first fix instead of seconds.
+  g_pmu.setButtonBatteryChargeVoltage(3300);
+  g_pmu.enableButtonBatteryCharge();
 
   // Charging is a hardware function of the AXP2101 and works without any of
   // this, but the current and termination voltage would then come from
