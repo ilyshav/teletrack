@@ -146,6 +146,15 @@ GpsFix buildSyntheticFix(uint32_t nowMs) {
 }
 
 void produceSample(uint32_t nowMs) {
+  // Nothing is listening, so there is nothing worth keeping. The reference
+  // implementation notifies the fix it just parsed and buffers nothing
+  // (gpsLoop() in docs/reference/racechrono/canbus-gps-device-main.ino);
+  // producing while disconnected filled the ring with up to 51 s of stale
+  // fixes, which then flooded out at 25x real time the moment RaceChrono
+  // connected -- timestamps racing, position jumping, no fix to lock onto.
+  if (!app.ble.connected()) {
+    return;
+  }
   if (nowMs - g_lastSampleMs < kSampleIntervalMs) {
     return;
   }
