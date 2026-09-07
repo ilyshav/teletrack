@@ -56,9 +56,6 @@ class UbxParser {
   uint8_t ckA_ = 0;
   uint8_t ckB_ = 0;
   uint8_t rxCkA_ = 0;
-  // The byte before this one. A 0xB5,0x62 pair appearing anywhere past the
-  // initial sync -- e.g. a fresh frame arriving right behind one that got
-  // truncated -- means a new frame is starting, whatever state we were in.
   GpsFix fix_;
   bool timeValid_ = false;
   uint32_t checksumErrors_ = 0;
