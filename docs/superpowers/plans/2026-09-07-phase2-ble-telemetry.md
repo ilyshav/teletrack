@@ -1118,7 +1118,10 @@ bool BleLink::begin(const char* deviceName, TelemetryRing& ring) {
     Log::error("ble", "createServer failed");
     return false;
   }
-  g_server->setCallbacks(&g_callbacks);
+  // false = do not take ownership. g_callbacks is a static object in .bss, and
+  // NimBLEServer's destructor deletes the callbacks it owns, which asserts on a
+  // non-heap pointer when BleLink::end() calls NimBLEDevice::deinit().
+  g_server->setCallbacks(&g_callbacks, false);
 
   NimBLEService* service = g_server->createService(kServiceUuid);
   g_live = service->createCharacteristic(kLiveUuid, NIMBLE_PROPERTY::NOTIFY);
