@@ -217,7 +217,7 @@ when the task runs.
 
 | Failure | Behaviour |
 | --- | --- |
-| BLE stack fails to start | Log `ERR`, fall back to `Wifi` mode so the device stays reachable |
+| BLE stack fails to start | Log `ERR`. No fallback — it has never happened, and the button is the recovery |
 | Client disconnects | Return to advertising; ring keeps filling and overwriting |
 | Notify queue full | Drop oldest, increment counter, never block |
 | Mode switch while connected | Disconnect cleanly, tear down, start the other stack |
@@ -270,9 +270,8 @@ of what the firmware does. This is why the acceptance criterion records the nego
 MTU and interval alongside the rate — a number without them is not interpretable.
 
 **GPIO4 is not wired.** Until it is, there is no way out of BLE mode and the
-configuration portal is unreachable — the device must be reflashed to recover. The
-only remaining safety net is §10's fallback to `Wifi` when the BLE stack itself fails
-to start. Wire the button before relying on this firmware.
+configuration portal is unreachable — the device must be reflashed to recover. There
+is no software safety net by design. Wire the button before relying on this firmware.
 
 **NimBLE is a new dependency and a different API from the bundled library.** If it
 does not behave, the fallback is Bluedroid at roughly double the memory cost — a

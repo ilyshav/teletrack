@@ -1355,6 +1355,9 @@ running, and does the teardown and startup.
 starts. Both drive the same front end, and starting BLE while the WiFi driver still
 holds the radio is the failure this ordering avoids.
 
+A radio that fails to start is logged and nothing more. There is no fallback path,
+because we have never seen one fail; the button is the recovery.
+
 - [ ] **Step 1: Write `src/main.cpp`**
 
 ```cpp
@@ -1404,11 +1407,7 @@ void startCurrentMode() {
     }
   } else {
     if (!app.ble.begin("teletrack", app.ring)) {
-      // BLE is the boot mode and the button may not be wired, so falling back
-      // to WiFi is the difference between a recoverable device and a brick.
-      Log::error("ble", "failed to start, falling back to wifi");
-      app.modes.handle(ModeEvent::ButtonHeld);
-      app.portal.begin();
+      Log::error("ble", "failed to start");
     }
   }
   app.modes.switchComplete();
@@ -1691,6 +1690,6 @@ git commit -m "Add BLE throughput measurement tool and record results"
    project is on 2.0.17. The spec was corrected before this plan was written.
 3. **No host test for `ConfigPortal::end()`** (Task 4). It is Arduino teardown calls
    with no logic; a host test would assert nothing. Covered by manual acceptance.
-4. **BLE-start failure falls back to WiFi** (Task 7). The spec's §10 calls for this;
-   it matters more than usual because the button may not be wired, so it is the
-   difference between a recoverable device and a reflash.
+4. **No fallback when a radio fails to start** (Task 7). An earlier draft had BLE
+   failure switch to WiFi. That is machinery for a failure we have never observed, so
+   it is gone: the failure is logged, and the button is the recovery.
