@@ -164,7 +164,8 @@ same firmware.
 - Modify: `src/radio/ModeButton.h` (take the pin from `BoardConfig`)
 
 **Interfaces:**
-- Produces: `BoardConfig::kModeButtonPin`, `kHasPmu`, `kI2cSda`, `kI2cScl`, `kBoardName`
+- Produces: `BoardConfig::kBoardName`, `kModeButtonPin`; plus `kI2cSda` and `kI2cScl`
+  on the T-Beam only
 
 - [ ] **Step 1: Write `src/board/BoardConfig.h`**
 
