@@ -18,12 +18,23 @@ bool headerDiffers(const DeviceStatus& a, const DeviceStatus& b) {
          (a.uptimeMs / 1000u) != (b.uptimeMs / 1000u);
 }
 
+// Header fields are drawn with a fixed background width so new text overwrites
+// the old in a single pass. Left column is anchored at x=4 growing right, the
+// right column at x=width-4 growing left; together they span the bar without
+// overlapping.
+constexpr int16_t kHeaderLeftWidth = 150;
+constexpr int16_t kHeaderRightWidth = 166;
+
 }  // namespace
 
 bool Display::begin() {
   tft_.init();
   tft_.setRotation(kRotation);
   tft_.fillScreen(TFT_BLACK);
+  // Painted once. drawHeader() must never clear the bar itself — clearing and
+  // then drawing is what made the header blink once a second as the uptime
+  // ticked.
+  tft_.fillRect(0, 0, tft_.width(), kHeaderHeight, TFT_NAVY);
 
   pinMode(TFT_BL, OUTPUT);
   digitalWrite(TFT_BL, HIGH);
@@ -56,12 +67,15 @@ void Display::tick(uint32_t nowMs, const DeviceStatus& status) {
 }
 
 void Display::drawHeader(const DeviceStatus& status) {
-  tft_.fillRect(0, 0, tft_.width(), kHeaderHeight, TFT_NAVY);
+  // No fillRect here on purpose. setTextPadding makes each drawString paint its
+  // own background out to a fixed width, so the new value covers the old one in
+  // the same operation and the bar is never momentarily blank.
   tft_.setTextFont(2);
   tft_.setTextSize(1);
   tft_.setTextColor(TFT_WHITE, TFT_NAVY);
 
   tft_.setTextDatum(TL_DATUM);
+  tft_.setTextPadding(kHeaderLeftWidth);
   tft_.drawString(status.ssid, 4, 2);
   tft_.drawString(status.apUp ? "AP UP" : "AP FAIL", 4, 20);
 
@@ -69,6 +83,7 @@ void Display::drawHeader(const DeviceStatus& status) {
   snprintf(right, sizeof(right), "%s  clients:%u", status.ip,
            (unsigned)status.clients);
   tft_.setTextDatum(TR_DATUM);
+  tft_.setTextPadding(kHeaderRightWidth);
   tft_.drawString(right, tft_.width() - 4, 2);
 
   char stamp[9];
@@ -77,6 +92,7 @@ void Display::drawHeader(const DeviceStatus& status) {
   snprintf(lower, sizeof(lower), "up %s", stamp);
   tft_.drawString(lower, tft_.width() - 4, 20);
 
+  tft_.setTextPadding(0);  // drawLog pads its own lines
   tft_.setTextDatum(TL_DATUM);
 }
 
