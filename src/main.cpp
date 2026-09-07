@@ -13,6 +13,7 @@
 #include "config/Settings.h"
 #include "core/DeviceStatus.h"
 #include "core/Log.h"
+#include "gps/GpsReceiver.h"
 #include "radio/ModeButton.h"
 #include "radio/RadioMode.h"
 #include "ui/Display.h"
@@ -27,11 +28,13 @@ using BoardDisplay = TftDisplay;
 
 namespace {
 
+#if !defined(BOARD_TBEAM)
 // Synthetic GPS until Phase 3 wires up a real receiver: a fix at roughly a
 // real GPS update rate, so the transport is exercised the way Phase 3 will
 // use it.
 constexpr uint32_t kSampleHz = 5;
 constexpr uint32_t kSampleIntervalMs = 1000 / kSampleHz;  // 200 ms
+#endif
 
 // Delay between a save that changes deviceName and the radio restart that
 // applies it. Returning from the POST handler only means the async web
@@ -39,6 +42,7 @@ constexpr uint32_t kSampleIntervalMs = 1000 / kSampleHz;  // 200 ms
 // moment before the AP that carried it (in WiFi mode) disappears.
 constexpr uint32_t kRenameFlushDelayMs = 250;
 
+#if !defined(BOARD_TBEAM)
 // A frozen point would prove the encoding parses but not that RaceChrono
 // tracks updates, which is the whole question Phase 2 exists to answer. So
 // instead: a slow circle at walking pace, centered on an arbitrary point,
@@ -55,6 +59,7 @@ constexpr uint16_t kStartYear = 2026;
 constexpr uint8_t kStartMonth = 9;
 constexpr uint8_t kStartDay = 7;
 constexpr uint32_t kStartHour = 12;
+#endif
 
 // The one global. Everything else is reached through it by reference.
 struct App {
@@ -63,6 +68,7 @@ struct App {
   TelemetryRing ring;
   BleLink ble;
   RaceChronoGps gps;
+  GpsReceiver gpsRx;
   ModeButton button;
   ModeController modes;
   Pmu pmu;
@@ -71,7 +77,9 @@ struct App {
 
 App app;
 
+#if !defined(BOARD_TBEAM)
 uint32_t g_lastSampleMs = 0;
+#endif
 uint32_t g_rateWindowMs = 0;
 uint32_t g_rateWindowBytes = 0;
 uint32_t g_kbPerSec = 0;
@@ -87,6 +95,11 @@ void startCurrentMode() {
     }
   }
   app.modes.switchComplete();
+
+  // A rate change arrives through the same restart path as a rename.
+  if (app.gpsRx.present() && app.gpsRx.rateHz() != app.settings.sampleHz) {
+    app.gpsRx.begin(app.settings.sampleHz);
+  }
 }
 
 void stopCurrentMode(RadioMode leaving) {
@@ -97,6 +110,7 @@ void stopCurrentMode(RadioMode leaving) {
   }
 }
 
+#if !defined(BOARD_TBEAM)
 // Builds a synthetic fix walking a slow circle, at the wall-clock time
 // kStartYear/Month/Day/Hour advanced by nowMs. Day/month/year rollover past
 // the 24-hour mark just increments day-of-month without regard for month
@@ -145,22 +159,18 @@ GpsFix buildSyntheticFix(uint32_t nowMs) {
   return fix;
 }
 
-void produceSample(uint32_t nowMs) {
-  // Nothing is listening, so there is nothing worth keeping. The reference
-  // implementation notifies the fix it just parsed and buffers nothing
-  // (gpsLoop() in docs/reference/racechrono/canbus-gps-device-main.ino);
-  // producing while disconnected filled the ring with up to 51 s of stale
-  // fixes, which then flooded out at 25x real time the moment RaceChrono
-  // connected -- timestamps racing, position jumping, no fix to lock onto.
+#endif  // !defined(BOARD_TBEAM)
+
+// Sends one RaceChrono packet per fix. Nothing is buffered ahead of a client:
+// the reference implementation notifies the fix it just parsed and keeps no
+// history (gpsLoop() in docs/reference/racechrono/canbus-gps-device-main.ino),
+// and producing while disconnected once filled the ring with a minute of stale
+// fixes that flooded out at 25x real time the moment RaceChrono connected.
+void publishFix(const GpsFix& fix) {
   if (!app.ble.connected()) {
     return;
   }
-  if (nowMs - g_lastSampleMs < kSampleIntervalMs) {
-    return;
-  }
-  g_lastSampleMs = nowMs;
 
-  const GpsFix fix = buildSyntheticFix(nowMs);
   const uint8_t syncBits = app.gps.updateSyncBits(fix);
 
   uint8_t mainPacket[TelemetrySample::kSize];
@@ -172,6 +182,35 @@ void produceSample(uint32_t nowMs) {
   app.ble.publishTime(timePacket);
 }
 
+#if defined(BOARD_TBEAM)
+
+// The receiver's own rate is the sample rate: one packet per NAV-PVT, no
+// timer and no resampling. Nothing goes out until the receiver says its clock
+// is valid -- a wrong timestamp is the axis every sample would be placed on.
+void produceSample(uint32_t nowMs, bool newFix) {
+  (void)nowMs;
+  if (!newFix || !app.gpsRx.timeValid()) {
+    return;
+  }
+  publishFix(app.gpsRx.fix());
+}
+
+#else
+
+void produceSample(uint32_t nowMs, bool newFix) {
+  (void)newFix;
+  if (!app.ble.connected()) {
+    return;
+  }
+  if (nowMs - g_lastSampleMs < kSampleIntervalMs) {
+    return;
+  }
+  g_lastSampleMs = nowMs;
+  publishFix(buildSyntheticFix(nowMs));
+}
+
+#endif
+
 DeviceStatus buildStatus(uint32_t nowMs) {
   DeviceStatus s = app.portal.status();
   s.mode = app.modes.mode();
@@ -180,6 +219,9 @@ DeviceStatus buildStatus(uint32_t nowMs) {
   s.dropped = app.ring.dropped();
   s.holdMs = app.button.heldMs(nowMs);
   s.uptimeMs = nowMs;
+  s.gpsPresent = app.gpsRx.present();
+  s.gpsTimeValid = app.gpsRx.timeValid();
+  s.gpsFix = app.gpsRx.fix();
   return s;
 }
 
@@ -218,6 +260,13 @@ void setup() {
   app.portal.loadSettings();
 
   app.button.begin();
+
+  // Rate comes from the saved setting, which Task 7's loadSettings() call
+  // just above has already read. On the DevKitC this returns false and the
+  // synthetic fix takes over; on the T-Beam a false means no receiver
+  // answered, and BLE carries on without it.
+  app.gpsRx.begin(app.settings.sampleHz);
+
   startCurrentMode();
 }
 
@@ -248,10 +297,14 @@ void loop() {
     }
   }
 
+  // Drained in both modes: the status screen shows satellites while the
+  // portal is up, and an undrained UART buffer would overflow either way.
+  const bool newFix = app.gpsRx.tick();
+
   if (app.modes.mode() == RadioMode::Wifi) {
     app.portal.tick(now);
   } else {
-    produceSample(now);
+    produceSample(now, newFix);
     app.ble.tick(now);
   }
 
