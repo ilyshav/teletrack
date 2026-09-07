@@ -461,13 +461,18 @@ class HoldDetector {
 bool HoldDetector::update(bool pressed, uint32_t nowMs) {
   if (pressed) {
     if (!pressed_) {
-      // First contact, or contact restored after a bounce.
-      pressed_ = true;
-      fired_ = false;
-      pressStartMs_ = nowMs;
-    } else if (releasing_) {
-      // Contact came back within the debounce window: the hold never broke.
-      releasing_ = false;
+      if (releasing_ && (nowMs - releaseStartMs_) < kDebounceMs) {
+        // Contact came back inside the debounce window: this was bounce, the
+        // hold never broke, so do not restart the timer.
+        pressed_ = true;
+        releasing_ = false;
+      } else {
+        // First contact, or a genuine new press after a real release.
+        pressed_ = true;
+        fired_ = false;
+        pressStartMs_ = nowMs;
+        releasing_ = false;
+      }
     }
 
     if (!fired_ && (nowMs - pressStartMs_) >= kHoldMs) {
@@ -477,17 +482,16 @@ bool HoldDetector::update(bool pressed, uint32_t nowMs) {
     return false;
   }
 
-  // Not pressed.
+  // Not pressed. pressed_ clears immediately so isHolding() and heldMs() tell
+  // the truth the moment the button is let go; whether this was bounce or a
+  // real release is tracked separately in releasing_/releaseStartMs_.
   if (pressed_) {
-    if (!releasing_) {
-      releasing_ = true;
-      releaseStartMs_ = nowMs;
-    } else if ((nowMs - releaseStartMs_) >= kDebounceMs) {
-      // Released for longer than bounce: the hold is genuinely over.
-      pressed_ = false;
-      releasing_ = false;
-      fired_ = false;
-    }
+    pressed_ = false;
+    releasing_ = true;
+    releaseStartMs_ = nowMs;
+  } else if (releasing_ && (nowMs - releaseStartMs_) >= kDebounceMs) {
+    releasing_ = false;
+    fired_ = false;
   }
   return false;
 }
