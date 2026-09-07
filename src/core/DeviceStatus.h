@@ -2,6 +2,8 @@
 
 #include <stdint.h>
 
+#include "radio/RadioMode.h"
+
 // A snapshot of what the device is doing right now. Produced by the config
 // module, consumed by the display and by GET /api/status. Plain data — copying
 // it is how the status crosses a task boundary safely.
@@ -12,4 +14,10 @@ struct DeviceStatus {
   uint32_t uptimeMs = 0;
   uint32_t freeHeap = 0;
   bool apUp = false;
+  RadioMode mode = RadioMode::Ble;
+  bool bleConnected = false;
+  uint32_t kbPerSec = 0;
+  uint32_t dropped = 0;
+  // Non-zero while the mode button is held; drives the countdown.
+  uint32_t holdMs = 0;
 };

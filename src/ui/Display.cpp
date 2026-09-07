@@ -6,15 +6,20 @@
 
 #include "core/Format.h"
 #include "core/Log.h"
+#include "radio/HoldDetector.h"
 
 namespace {
 
 // The header is worth repainting only when something on it actually changed.
 // Uptime is compared at second resolution, which is the only field that moves
-// on its own.
+// on its own. holdMs is compared at 100 ms resolution so the countdown
+// animates without repainting on every single frame.
 bool headerDiffers(const DeviceStatus& a, const DeviceStatus& b) {
   return strcmp(a.ssid, b.ssid) != 0 || strcmp(a.ip, b.ip) != 0 ||
          a.clients != b.clients || a.apUp != b.apUp ||
+         a.mode != b.mode || a.bleConnected != b.bleConnected ||
+         a.kbPerSec != b.kbPerSec || a.dropped != b.dropped ||
+         (a.holdMs / 100u) != (b.holdMs / 100u) ||
          (a.uptimeMs / 1000u) != (b.uptimeMs / 1000u);
 }
 
@@ -74,23 +79,48 @@ void Display::drawHeader(const DeviceStatus& status) {
   tft_.setTextSize(1);
   tft_.setTextColor(TFT_WHITE, TFT_NAVY);
 
+  char topLeft[40];
+  char topRight[40];
+  char bottomLeft[40];
+
+  if (status.mode == RadioMode::Wifi) {
+    snprintf(topLeft, sizeof(topLeft), "%s", status.ssid);
+    snprintf(topRight, sizeof(topRight), "%s  clients:%u", status.ip,
+             (unsigned)status.clients);
+    snprintf(bottomLeft, sizeof(bottomLeft), "%s", status.apUp ? "AP UP" : "AP FAIL");
+  } else {
+    snprintf(topLeft, sizeof(topLeft), "teletrack");
+    snprintf(topRight, sizeof(topRight), "%s",
+             status.bleConnected ? "BLE CONN" : "BLE ADV");
+    if (status.bleConnected) {
+      snprintf(bottomLeft, sizeof(bottomLeft), "%u kB/s drop:%u",
+               (unsigned)status.kbPerSec, (unsigned)status.dropped);
+    } else {
+      snprintf(bottomLeft, sizeof(bottomLeft), "WAITING");
+    }
+  }
+
+  // A hold in progress takes over the bottom-left field: it is the only
+  // feedback that the button is doing anything.
+  if (status.holdMs > 0) {
+    snprintf(bottomLeft, sizeof(bottomLeft), "HOLD %lus",
+             (unsigned long)((HoldDetector::kHoldMs - status.holdMs) / 1000u + 1u));
+  }
+
   tft_.setTextDatum(TL_DATUM);
   tft_.setTextPadding(kHeaderLeftWidth);
-  tft_.drawString(status.ssid, 4, 2);
-  tft_.drawString(status.apUp ? "AP UP" : "AP FAIL", 4, 20);
-
-  char right[48];
-  snprintf(right, sizeof(right), "%s  clients:%u", status.ip,
-           (unsigned)status.clients);
-  tft_.setTextDatum(TR_DATUM);
-  tft_.setTextPadding(kHeaderRightWidth);
-  tft_.drawString(right, tft_.width() - 4, 2);
+  tft_.drawString(topLeft, 4, 2);
+  tft_.drawString(bottomLeft, 4, 20);
 
   char stamp[9];
   Format::uptime(status.uptimeMs, stamp, sizeof(stamp));
-  char lower[48];
-  snprintf(lower, sizeof(lower), "up %s", stamp);
-  tft_.drawString(lower, tft_.width() - 4, 20);
+  char bottomRight[40];
+  snprintf(bottomRight, sizeof(bottomRight), "up %s", stamp);
+
+  tft_.setTextDatum(TR_DATUM);
+  tft_.setTextPadding(kHeaderRightWidth);
+  tft_.drawString(topRight, tft_.width() - 4, 2);
+  tft_.drawString(bottomRight, tft_.width() - 4, 20);
 
   tft_.setTextPadding(0);  // drawLog pads its own lines
   tft_.setTextDatum(TL_DATUM);
