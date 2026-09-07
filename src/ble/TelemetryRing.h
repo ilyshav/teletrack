@@ -3,17 +3,15 @@
 #include <stddef.h>
 #include <stdint.h>
 
-// One telemetry sample as it goes over the air. Packed so the on-wire layout is
-// exactly kSize bytes and the receiver can parse it with a fixed stride.
+// One ready-to-send RaceChrono GPS main-characteristic packet (UUID 0x0003).
+// Opaque here: RaceChronoGps builds it, TelemetryRing only moves it. Packed so
+// the on-wire layout is exactly kSize bytes and drain() can use a fixed
+// stride. A RaceChrono packet carries its own time (see RaceChronoGps), so
+// there is no separate seq/uptimeMs framing.
 struct __attribute__((packed)) TelemetrySample {
-  // Room Phase 3 will use for real GPS and IMU fields. Phase 2 fills it with a
-  // pattern so the transport can be measured before the payload exists.
-  static constexpr size_t kPayloadBytes = 12;
-  static constexpr size_t kSize = sizeof(uint32_t) * 2 + kPayloadBytes;  // 20
+  static constexpr size_t kSize = 20;
 
-  uint32_t seq;
-  uint32_t uptimeMs;
-  uint8_t payload[kPayloadBytes];
+  uint8_t bytes[kSize];
 };
 
 // Fixed ring between the sample producer and the BLE notify pump.
@@ -26,9 +24,8 @@ class TelemetryRing {
   // 256 * 20 B = 5.1 kB, about 1.28 s of production at 200 Hz.
   static constexpr size_t kCapacity = 256;
 
-  // seq is assigned here, so it counts every sample ever produced — including
-  // the dropped ones. A gap at the receiver is exactly the loss.
-  void push(uint32_t uptimeMs, const uint8_t* payload);
+  // Copies one already-encoded packet (TelemetrySample::kSize bytes) in.
+  void push(const uint8_t* packet);
 
   // Copies as many whole samples as fit into out, returning bytes written.
   // Never writes a partial sample.
@@ -43,7 +40,6 @@ class TelemetryRing {
   TelemetrySample samples_[kCapacity] = {};
   size_t head_ = 0;   // oldest
   size_t count_ = 0;
-  uint32_t nextSeq_ = 0;
   uint32_t dropped_ = 0;
   uint32_t produced_ = 0;
 };

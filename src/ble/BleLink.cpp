@@ -6,9 +6,14 @@
 
 namespace {
 
+// Upper bound on packets notified per tick() call. Keeps loop() bounded even
+// if the ring built up a backlog while disconnected; at the producer's GPS
+// rate this comfortably drains within a few ticks.
+constexpr size_t kMaxPacketsPerTick = 8;
+
 NimBLEServer* g_server = nullptr;
-NimBLECharacteristic* g_live = nullptr;
-NimBLECharacteristic* g_status = nullptr;
+NimBLECharacteristic* g_gpsMain = nullptr;
+NimBLECharacteristic* g_gpsTime = nullptr;
 bool g_connected = false;
 uint16_t g_mtu = 23;
 
@@ -61,9 +66,10 @@ bool BleLink::begin(const char* deviceName, TelemetryRing& ring) {
   g_server->setCallbacks(&g_callbacks, false);
 
   NimBLEService* service = g_server->createService(kServiceUuid);
-  g_live = service->createCharacteristic(kLiveUuid, NIMBLE_PROPERTY::NOTIFY);
-  g_status = service->createCharacteristic(
-      kStatusUuid, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+  g_gpsMain = service->createCharacteristic(
+      kGpsMainUuid, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+  g_gpsTime = service->createCharacteristic(
+      kGpsTimeUuid, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
   service->start();
 
   NimBLEAdvertising* advertising = NimBLEDevice::getAdvertising();
@@ -85,8 +91,8 @@ void BleLink::end() {
   NimBLEDevice::stopAdvertising();
   NimBLEDevice::deinit(true);
   g_server = nullptr;
-  g_live = nullptr;
-  g_status = nullptr;
+  g_gpsMain = nullptr;
+  g_gpsTime = nullptr;
   g_connected = false;
   g_mtu = 23;
   connected_ = false;
@@ -95,25 +101,33 @@ void BleLink::end() {
 }
 
 void BleLink::tick(uint32_t nowMs) {
+  (void)nowMs;
   connected_ = g_connected;
   mtu_ = g_mtu;
 
-  if (!connected_ || ring_ == nullptr || g_live == nullptr) {
+  if (!connected_ || ring_ == nullptr || g_gpsMain == nullptr) {
     return;
   }
 
-  // Fill one notification to just under the negotiated MTU. Batching is what
-  // keeps protocol overhead from eating the budget.
-  const size_t budget = (mtu_ > 3) ? static_cast<size_t>(mtu_ - 3) : 20;
-  const size_t limit = budget < kMaxNotifyBytes ? budget : kMaxNotifyBytes;
+  uint8_t packet[TelemetrySample::kSize];
+  for (size_t i = 0; i < kMaxPacketsPerTick; ++i) {
+    const size_t n = ring_->drain(packet, sizeof(packet));
+    if (n == 0) {
+      break;
+    }
+    g_gpsMain->setValue(packet, n);
+    g_gpsMain->notify();
+    sentBytes_ += n;
+  }
+}
 
-  uint8_t buffer[kMaxNotifyBytes];
-  const size_t n = ring_->drain(buffer, limit);
-  if (n == 0) {
+void BleLink::publishTime(const uint8_t bytes[3]) {
+  if (g_gpsTime == nullptr) {
     return;
   }
-
-  g_live->setValue(buffer, n);
-  g_live->notify();
-  sentBytes_ += n;
+  g_gpsTime->setValue(bytes, 3);
+  if (connected_) {
+    g_gpsTime->notify();
+    sentBytes_ += 3;
+  }
 }

@@ -2,7 +2,7 @@
 
 #include <string.h>
 
-void TelemetryRing::push(uint32_t uptimeMs, const uint8_t* payload) {
+void TelemetryRing::push(const uint8_t* packet) {
   size_t slot;
   if (count_ < kCapacity) {
     slot = (head_ + count_) % kCapacity;
@@ -14,9 +14,7 @@ void TelemetryRing::push(uint32_t uptimeMs, const uint8_t* payload) {
     ++dropped_;
   }
 
-  samples_[slot].seq = nextSeq_++;
-  samples_[slot].uptimeMs = uptimeMs;
-  memcpy(samples_[slot].payload, payload, TelemetrySample::kPayloadBytes);
+  memcpy(samples_[slot].bytes, packet, TelemetrySample::kSize);
   ++produced_;
 }
 

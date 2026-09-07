@@ -1,8 +1,11 @@
 #ifndef PIO_UNIT_TESTING
 
+#include <math.h>
+
 #include <Arduino.h>
 
 #include "ble/BleLink.h"
+#include "ble/RaceChronoGps.h"
 #include "ble/TelemetryRing.h"
 #include "config/ConfigPortal.h"
 #include "config/Settings.h"
@@ -14,10 +17,28 @@
 
 namespace {
 
-// Synthetic telemetry until GPS and IMU exist: same cadence and packet size as
-// the real thing, so the throughput measured here is the throughput Phase 3 gets.
-constexpr uint32_t kSampleHz = 200;
-constexpr uint32_t kSampleIntervalMs = 1000 / kSampleHz;  // 5 ms
+// Synthetic GPS until Phase 3 wires up a real receiver: a fix at roughly a
+// real GPS update rate, so the transport is exercised the way Phase 3 will
+// use it.
+constexpr uint32_t kSampleHz = 5;
+constexpr uint32_t kSampleIntervalMs = 1000 / kSampleHz;  // 200 ms
+
+// A frozen point would prove the encoding parses but not that RaceChrono
+// tracks updates, which is the whole question Phase 2 exists to answer. So
+// instead: a slow circle at walking pace, centered on an arbitrary point,
+// with a wall clock that advances from an arbitrary start time.
+constexpr double kCircleCenterLatDeg = 52.0;   // arbitrary demo location
+constexpr double kCircleCenterLonDeg = 4.0;
+constexpr float kCircleRadiusM = 20.0f;
+constexpr float kWalkSpeedKmh = 5.0f;                    // brisk walking pace
+constexpr float kWalkSpeedMps = kWalkSpeedKmh / 3.6f;
+constexpr float kAngularSpeedRadPerS = kWalkSpeedMps / kCircleRadiusM;
+constexpr double kEarthRadiusM = 6371000.0;
+
+constexpr uint16_t kStartYear = 2026;
+constexpr uint8_t kStartMonth = 9;
+constexpr uint8_t kStartDay = 7;
+constexpr uint32_t kStartHour = 12;
 
 // The one global. Everything else is reached through it by reference.
 struct App {
@@ -25,6 +46,7 @@ struct App {
   ConfigPortal portal{settings};
   TelemetryRing ring;
   BleLink ble;
+  RaceChronoGps gps;
   ModeButton button;
   ModeController modes;
   Display display;
@@ -58,19 +80,70 @@ void stopCurrentMode(RadioMode leaving) {
   }
 }
 
+// Builds a synthetic fix walking a slow circle, at the wall-clock time
+// kStartYear/Month/Day/Hour advanced by nowMs. Day/month/year rollover past
+// the 24-hour mark just increments day-of-month without regard for month
+// length -- fine for a demo session that runs for minutes, not months.
+GpsFix buildSyntheticFix(uint32_t nowMs) {
+  const float theta = kAngularSpeedRadPerS * (static_cast<float>(nowMs) / 1000.0f);
+
+  // Tangent-plane offset from the center, in meters: north/east components of
+  // a point going around the circle, and of its velocity (the derivative).
+  const float northM = kCircleRadiusM * sinf(theta);
+  const float eastM = kCircleRadiusM * cosf(theta);
+  const float velNorthMps = kWalkSpeedMps * cosf(theta);
+  const float velEastMps = -kWalkSpeedMps * sinf(theta);
+
+  const double latRad = kCircleCenterLatDeg * M_PI / 180.0;
+  const double dLatDeg = (northM / kEarthRadiusM) * (180.0 / M_PI);
+  const double dLonDeg =
+      (eastM / (kEarthRadiusM * cos(latRad))) * (180.0 / M_PI);
+
+  float bearingDeg = atan2f(velEastMps, velNorthMps) * (180.0f / static_cast<float>(M_PI));
+  if (bearingDeg < 0.0f) {
+    bearingDeg += 360.0f;
+  }
+
+  const uint32_t totalSeconds = nowMs / 1000;
+  const uint32_t millisPart = nowMs % 1000;
+  const uint32_t totalMinutes = totalSeconds / 60;
+  const uint32_t totalHours = kStartHour + totalMinutes / 60;
+
+  GpsFix fix;
+  fix.latE7 = static_cast<int32_t>((kCircleCenterLatDeg + dLatDeg) * 1e7);
+  fix.lonE7 = static_cast<int32_t>((kCircleCenterLonDeg + dLonDeg) * 1e7);
+  fix.altitudeM = 10.0f;
+  fix.speedKmh = kWalkSpeedKmh;
+  fix.bearingDeg = bearingDeg;
+  fix.hdop = 1.0f;
+  fix.fixQuality = 1;
+  fix.satellites = 8;
+  fix.year = kStartYear;
+  fix.month = kStartMonth;
+  fix.day = static_cast<uint8_t>(kStartDay + totalHours / 24);
+  fix.hour = static_cast<uint8_t>(totalHours % 24);
+  fix.minute = static_cast<uint8_t>(totalMinutes % 60);
+  fix.seconds = static_cast<uint8_t>(totalSeconds % 60);
+  fix.millis = static_cast<uint16_t>(millisPart);
+  return fix;
+}
+
 void produceSample(uint32_t nowMs) {
   if (nowMs - g_lastSampleMs < kSampleIntervalMs) {
     return;
   }
   g_lastSampleMs = nowMs;
 
-  // Phase 3 replaces this with real GPS and IMU fields. The pattern is
-  // deliberate: a receiver can spot corruption as well as loss.
-  uint8_t payload[TelemetrySample::kPayloadBytes];
-  for (size_t i = 0; i < sizeof(payload); ++i) {
-    payload[i] = static_cast<uint8_t>(nowMs + i);
-  }
-  app.ring.push(nowMs, payload);
+  const GpsFix fix = buildSyntheticFix(nowMs);
+  const uint8_t syncBits = app.gps.updateSyncBits(fix);
+
+  uint8_t mainPacket[TelemetrySample::kSize];
+  RaceChronoGps::encodeMain(fix, syncBits, mainPacket);
+  app.ring.push(mainPacket);
+
+  uint8_t timePacket[3];
+  RaceChronoGps::encodeTime(fix, syncBits, timePacket);
+  app.ble.publishTime(timePacket);
 }
 
 DeviceStatus buildStatus(uint32_t nowMs) {
