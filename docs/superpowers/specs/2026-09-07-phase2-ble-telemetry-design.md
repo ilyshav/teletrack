@@ -42,7 +42,6 @@ degraded timing on both, the device is in exactly one mode at a time.
 
 - **Boot mode is `Ble`.** The device advertises immediately on power-up.
 - **GPIO4 held for 3 seconds** toggles the mode. Active-low with an internal pull-up.
-- **A write to the `mode` characteristic** requests `Wifi`.
 - On a switch, the outgoing stack is fully torn down before the incoming one starts.
 
 ### Why the button is a 3-second hold
@@ -54,15 +53,14 @@ it should and holding longer does not toggle twice.
 
 The screen counts the hold down while the button is held, so the timing is visible.
 
-### Why a `mode` characteristic exists
+### Prerequisite: GPIO4 must be wired
 
-Boot mode is `Ble` and the GPIO4 button **is not yet physically wired**. Without a
-second route, a device would boot into BLE with no way to reach the configuration
-portal — unconfigurable until someone solders a button on.
+Boot mode is `Ble` and the button is the only way out of it. Until GPIO4 has a button
+on it, a flashed device advertises over BLE and its configuration portal cannot be
+reached at all.
 
-Writing `1` to the `mode` characteristic requests `Wifi`. That makes "WiFi on demand"
-mean the button *or* any BLE client, removes the lockout entirely, and stays useful
-after the button exists.
+Wiring the button is therefore a prerequisite for using this firmware, not a
+follow-up. The recovery if it is not wired is a reflash.
 
 ## 4. Module structure
 
@@ -142,7 +140,7 @@ measurement trustworthy.
 
 ## 7. GATT layout
 
-One service, three characteristics. UUIDs are 128-bit randoms fixed in
+One service, two characteristics. UUIDs are 128-bit randoms fixed in
 `BleLink.h`; the advertised device name is `teletrack`.
 
 ### `live` — notify
@@ -165,10 +163,6 @@ JSON, reusing the Phase 1 `ConfigApi` style:
 { "mode": "ble", "uptimeMs": 134221, "freeHeap": 186432,
   "mtu": 517, "connIntervalMs": 15, "sent": 84213, "dropped": 12 }
 ```
-
-### `mode` — write
-
-A single byte: `0` requests `Ble`, `1` requests `Wifi`. Any other value is ignored.
 
 ## 8. Screen
 
@@ -242,11 +236,13 @@ No failure path reboots the device.
 
 - BLE advertises and accepts a connection.
 - Throughput measured per §9.
-- Mode switch via the `mode` characteristic, since GPIO4 is unwired.
+- Mode switch via GPIO4, once the button is wired. Until then this is untestable
+  on hardware, which is why the hold logic is host-tested against synthetic
+  timestamps.
 
 **Manual acceptance:** power on → `BLE ADV` on screen → connect a phone →
-`BLE CONN` with a live rate → run the throughput measurement → write `1` to `mode` →
-screen shows `AP UP` and the config page is reachable → write `0` or reboot → back to
+`BLE CONN` with a live rate → run the throughput measurement → hold GPIO4 for 3 s →
+screen shows `AP UP` and the config page is reachable → hold again or reboot → back to
 BLE.
 
 ## 12. Success criteria
@@ -256,7 +252,7 @@ BLE.
 - [ ] Sustained throughput ≥ 30 kB/s with < 1% sequence loss, measured and recorded.
 - [ ] `tools/ble_throughput.py` produces a repeatable measurement from the laptop.
 - [ ] Dropped samples are counted, exposed in `status`, and shown on screen.
-- [ ] A `mode` write switches to WiFi and the Phase 1 portal works unchanged.
+- [ ] Holding GPIO4 for 3 s switches to WiFi and the Phase 1 portal works unchanged.
 - [ ] GPIO4 held 3 s toggles the mode, once the button is wired.
 - [ ] The screen always shows the current mode.
 - [ ] Host test suite passes with no hardware attached.
@@ -268,9 +264,10 @@ that negotiates a 30 ms connection interval will roughly halve throughput regard
 of what the firmware does. This is why the acceptance criterion records the negotiated
 MTU and interval alongside the rate — a number without them is not interpretable.
 
-**GPIO4 is not wired.** Until it is, the `mode` characteristic is the only way out of
-BLE mode. If BLE also fails to start, §10's fallback to `Wifi` is the remaining
-safety net.
+**GPIO4 is not wired.** Until it is, there is no way out of BLE mode and the
+configuration portal is unreachable — the device must be reflashed to recover. The
+only remaining safety net is §10's fallback to `Wifi` when the BLE stack itself fails
+to start. Wire the button before relying on this firmware.
 
 **NimBLE is a new dependency and a different API from the bundled library.** If it
 does not behave, the fallback is Bluedroid at roughly double the memory cost — a
