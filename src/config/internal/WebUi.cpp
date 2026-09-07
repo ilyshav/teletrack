@@ -1,5 +1,7 @@
 #include "config/internal/WebUi.h"
 
+#include <Arduino.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "config/ConfigPortal.h"
@@ -19,7 +21,7 @@ void sendJson(AsyncWebServerRequest* request, uint16_t status, const char* body,
 
 }  // namespace
 
-WebUi::WebUi(Settings& settings, SettingsStore& store, const ConfigPortal& portal)
+WebUi::WebUi(Settings& settings, SettingsStore& store, ConfigPortal& portal)
     : settings_(settings), store_(store), portal_(portal) {}
 
 void WebUi::registerRoutes(AsyncWebServer& server) {
@@ -90,9 +92,17 @@ void WebUi::handleSave(AsyncWebServerRequest* request) {
   const size_t effectiveLen =
       bodyOverflow_ ? ConfigApi::kMaxBodyBytes + 1 : bodyLen_;
 
+  // Captured before the save so a name change can be detected afterwards —
+  // ConfigService::save() overwrites settings_ in place on success.
+  char previousName[Settings::kDeviceNameSize];
+  snprintf(previousName, sizeof(previousName), "%s", settings_.deviceName);
+
   char response[ConfigApi::kJsonBufferSize];
   const ConfigService::SaveOutcome outcome = ConfigService::save(
       body_, effectiveLen, settings_, store_, response, sizeof(response));
+
+  const bool renamed = outcome.httpStatus == 200 &&
+                        strcmp(previousName, settings_.deviceName) != 0;
 
   if (outcome.httpStatus == 200) {
     Log::info("cfg", "saved name=%s hz=%u", settings_.deviceName,
@@ -102,6 +112,14 @@ void WebUi::handleSave(AsyncWebServerRequest* request) {
   }
 
   sendJson(request, outcome.httpStatus, response, outcome.bodyLength);
+
+  // Flagged, never acted on here: the radio restart that a rename requires
+  // must happen from loop(), after this response has had a chance to reach
+  // the client — not inside this handler.
+  if (renamed) {
+    Log::info("cfg", "device name changed, radio restart pending");
+    portal_.flagRenamePending(millis());
+  }
 
   bodyLen_ = 0;
   bodyOverflow_ = false;

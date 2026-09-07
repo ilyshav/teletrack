@@ -18,7 +18,7 @@ bool ConfigPortal::begin() {
     Log::info("cfg", "no stored settings, using defaults");
   }
 
-  if (!ap_.begin(kSsid, kChannel, kMaxClients)) {
+  if (!ap_.begin(settings_.deviceName, kChannel, kMaxClients)) {
     return false;
   }
 

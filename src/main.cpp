@@ -23,6 +23,12 @@ namespace {
 constexpr uint32_t kSampleHz = 5;
 constexpr uint32_t kSampleIntervalMs = 1000 / kSampleHz;  // 200 ms
 
+// Delay between a save that changes deviceName and the radio restart that
+// applies it. Returning from the POST handler only means the async web
+// server queued the response, not that it left the socket -- this gives it a
+// moment before the AP that carried it (in WiFi mode) disappears.
+constexpr uint32_t kRenameFlushDelayMs = 250;
+
 // A frozen point would prove the encoding parses but not that RaceChrono
 // tracks updates, which is the whole question Phase 2 exists to answer. So
 // instead: a slow circle at walking pace, centered on an arbitrary point,
@@ -65,7 +71,7 @@ void startCurrentMode() {
       Log::error("boot", "config portal failed to start");
     }
   } else {
-    if (!app.ble.begin("teletrack", app.ring)) {
+    if (!app.ble.begin(app.settings.deviceName, app.ring)) {
       Log::error("ble", "failed to start");
     }
   }
@@ -182,6 +188,20 @@ void setup() {
 
 void loop() {
   const uint32_t now = millis();
+
+  // A device-name save flags this; acted on here, never inside the request
+  // handler, and only once the response has had a moment to leave the async
+  // task. The rename can only be requested through the WiFi config page, so
+  // in practice this always restarts the portal -- but it restarts whichever
+  // radio is actually active, same as a mode switch.
+  if (app.portal.renamePending() &&
+      now - app.portal.renameFlaggedAtMs() >= kRenameFlushDelayMs) {
+    app.portal.clearRenamePending();
+    Log::info("cfg", "restarting radio with new name");
+    const RadioMode current = app.modes.mode();
+    stopCurrentMode(current);
+    startCurrentMode();
+  }
 
   if (app.button.tick(now)) {
     const RadioMode leaving = app.modes.mode();
