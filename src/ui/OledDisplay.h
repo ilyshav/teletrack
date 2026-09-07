@@ -7,15 +7,16 @@
 #include "core/LogRing.h"
 #include "ui/Display.h"
 
-// SH1106 128x64 over I2C. At the 6x8 font that is 21 columns by 8 rows: two
-// header rows drawn in inverse video, then the six most recent log lines
-// truncated to fit.
+// SH1106 128x64 over I2C. At the 6x8 font that is 21 columns by 8 rows: one
+// header row in inverse video, then the seven most recent log lines truncated
+// to fit. On 21 columns every row spent on chrome is a row of log lost, so the
+// header carries only what changes -- state, its one relevant count, uptime.
 class OledDisplay : public Display {
  public:
   static constexpr uint32_t kMinRedrawIntervalMs = 100;  // 10 Hz ceiling
   static constexpr size_t kCols = 21;
-  static constexpr size_t kHeaderRows = 2;
-  static constexpr size_t kLogRows = 6;
+  static constexpr size_t kHeaderRows = 1;
+  static constexpr size_t kLogRows = 7;
   static constexpr int16_t kRowHeight = 8;
 
   // 0x3C is the SSD1306/SH1106 default, but on T-Beam Supreme V3 the QMC6310N

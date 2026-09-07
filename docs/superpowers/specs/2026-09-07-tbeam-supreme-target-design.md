@@ -70,36 +70,42 @@ resizing, no coupling between the two displays, no host tests to rewrite.
 
 ## 4. OLED layout
 
-128×64 at the 6×8 font is **21 columns × 8 rows**. Two header rows and six log rows fill
-it exactly, so there is no room for a separator row — the header is drawn in inverse
-video instead, which divides the areas more clearly and costs nothing.
+128×64 at the 6×8 font is **21 columns × 8 rows**. On a panel that narrow every
+row spent on chrome is a row of log lost, so the header is **one row**, drawn in
+inverse video — which separates it from the log without spending a second row on
+a rule. Seven rows are left for the log.
 
 ```
 +---------------------+
-|teletrack    BLE CONN|  inverse video
-|up 00:12:34   drop 0 |  inverse video
-|mode: switching      |
+|BLE CONN d0  00:12:34|  inverse video
 |ble: advertising as ~|
 |ap: up ssid=teletra~ |
 |http: listening on ~ |
 |cfg: no stored sett~ |
-|boot: teletrack      |
+|display: SH1106 at 0~|
+|pmu: AXP2101 up, ch~ |
+|boot: teletrack on ~ |
 +---------------------+
 ```
 
-**The timestamp and level are dropped on this display.** `HH:MM:SS [INF] ` spends 15 of
-21 columns before the message starts. The OLED shows `tag: message` truncated with a
-trailing `~`, the same convention `LogRing` already uses. Serial keeps the full line,
-timestamp and level included.
+**The device name is not drawn.** It is the same on every row of every boot and
+tells the person holding the device nothing they do not already know. The header
+carries only what changes: the state, the one count that matters in that state,
+and uptime.
 
-Header content follows the TFT's, compressed:
-
-| Mode | Row 0 | Row 1 |
+| State | Left | Right |
 | --- | --- | --- |
-| WiFi | `<ssid>` … `AP UP` | `up HH:MM:SS` … `<n> cli` |
-| BLE, advertising | `<name>` … `BLE ADV` | `up HH:MM:SS` |
-| BLE, connected | `<name>` … `BLE CONN` | `up HH:MM:SS` … `drop <n>` |
-| button held | unchanged | `HOLD 3s… <n>` |
+| WiFi | `AP UP <n> cli`, or `AP FAIL` | `HH:MM:SS` |
+| BLE, advertising | `BLE ADV` | `HH:MM:SS` |
+| BLE, connected | `BLE CONN`, `BLE CONN d<n>` when dropping | `HH:MM:SS` |
+| button held | `HOLD <n>s` | `HH:MM:SS` |
+
+The widest of these — `BLE CONN d99` plus the stamp — is 20 of 21 columns.
+
+**The timestamp and level are dropped from log lines.** `HH:MM:SS [INF] ` spends
+15 of 21 columns before the message starts, leaving six. The OLED shows
+`tag: message`, truncated with a trailing `~` — the same convention `LogRing`
+already uses. Serial keeps the full line, stamp and level included.
 
 ## 5. Board configuration
 
