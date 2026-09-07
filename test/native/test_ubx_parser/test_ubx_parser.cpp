@@ -340,13 +340,31 @@ static void test_negative_nano_yields_zero_millis() {
   TEST_ASSERT_EQUAL_UINT16(0, parser.fix().millis);
 }
 
-static void test_maximum_nano_clamps_to_999_millis() {
+static void test_nano_at_a_full_second_clamps_to_999_millis() {
   PvtFields fields;
-  fields.nano = 999999999;
+  // The UBX range for nano is +/-1e9, and 1e9 / 1e6 is 1000 -- one past what
+  // a milliseconds field can hold. 999999999 would NOT exercise the clamp:
+  // integer division already truncates it to 999, so the guard could be
+  // deleted and the test would still pass.
+  fields.nano = 1000000000;
   UbxParser parser;
   const Frame f = makePvtFrame(fields);
   TEST_ASSERT_EQUAL_INT(1, feedAll(parser, f.bytes, f.len));
   TEST_ASSERT_EQUAL_UINT16(999, parser.fix().millis);
+}
+
+static void test_dead_reckoning_is_not_a_usable_fix() {
+  PvtFields fields;
+  // fixType 1 is dead reckoning: the receiver is propagating a previous fix,
+  // not solving one. gnssFixOK is set, so a rule that checked only that flag
+  // would wrongly call this a GPS fix. Same for fixType 5, time-only.
+  fields.fixType = 1;
+  fields.flags = 0x01;
+  UbxParser parser;
+  const Frame f = makePvtFrame(fields);
+  TEST_ASSERT_EQUAL_INT(1, feedAll(parser, f.bytes, f.len));
+  TEST_ASSERT_EQUAL_UINT8(0, parser.fix().fixQuality);
+  TEST_ASSERT_EQUAL_UINT8(1, parser.fix().fixType);
 }
 
 int main(int, char**) {
@@ -369,6 +387,7 @@ int main(int, char**) {
   RUN_TEST(test_gnss_fix_ok_clear_overrides_a_good_fix_type);
   RUN_TEST(test_time_valid_requires_both_date_and_time_flags);
   RUN_TEST(test_negative_nano_yields_zero_millis);
-  RUN_TEST(test_maximum_nano_clamps_to_999_millis);
+  RUN_TEST(test_nano_at_a_full_second_clamps_to_999_millis);
+  RUN_TEST(test_dead_reckoning_is_not_a_usable_fix);
   return UNITY_END();
 }

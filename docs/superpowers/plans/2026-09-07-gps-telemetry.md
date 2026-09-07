@@ -789,12 +789,12 @@ void UbxParser::decodePvt() {
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `pio test -e native -f native/test_ubx_parser`
-Expected: `19 test cases: 19 succeeded`
+Expected: `21 test cases: 21 succeeded`
 
 - [ ] **Step 5: Run the whole suite**
 
 Run: `pio test -e native`
-Expected: `114 test cases: 114 succeeded`
+Expected: `115 test cases: 115 succeeded`
 
 - [ ] **Step 6: Commit**
 
@@ -1087,13 +1087,22 @@ size_t addU4(uint8_t* p, size_t n, uint32_t key, uint32_t value) {
   return n;
 }
 
-// Opens Serial1 at baud and reports whether anything arrives within kProbeMs.
+// Opens Serial1 at baud and looks for evidence of a receiver: a UBX sync
+// pair, or the '$' that starts an NMEA sentence. Merely seeing bytes is not
+// evidence -- a floating RX pin, or the right pin at the wrong baud, produces
+// plenty of those, and accepting them would lock us to a baud that cannot
+// carry a single valid frame.
 bool probe(uint32_t baud) {
   Serial1.begin(baud, SERIAL_8N1, BoardConfig::kGpsRxPin, BoardConfig::kGpsTxPin);
   const uint32_t deadline = millis() + kProbeMs;
+  uint8_t prev = 0;
   while (millis() < deadline) {
-    if (Serial1.available() > 0) {
-      return true;
+    while (Serial1.available() > 0) {
+      const uint8_t b = static_cast<uint8_t>(Serial1.read());
+      if (b == '$' || (prev == UbxParser::kSync1 && b == UbxParser::kSync2)) {
+        return true;
+      }
+      prev = b;
     }
     delay(5);
   }
@@ -1211,7 +1220,7 @@ Expected: `SUCCESS` for both.
 - [ ] **Step 4: Confirm the parser stayed out of the native build's way**
 
 Run: `pio test -e native`
-Expected: `114 test cases: 114 succeeded`. `GpsReceiver.cpp` is not in `[env:native]`'s `build_src_filter` and must not be added — it includes Arduino.
+Expected: `115 test cases: 115 succeeded`. `GpsReceiver.cpp` is not in `[env:native]`'s `build_src_filter` and must not be added — it includes Arduino.
 
 - [ ] **Step 5: Record the baud finding in `docs/hardware-notes.md`**
 
@@ -1429,7 +1438,7 @@ Expected: `SUCCESS` for both. The TFT is untouched, so the DevKitC still shows i
 - [ ] **Step 6: Run the host tests**
 
 Run: `pio test -e native`
-Expected: `114 test cases: 114 succeeded`
+Expected: `115 test cases: 115 succeeded`
 
 - [ ] **Step 7: Commit**
 
@@ -1528,7 +1537,7 @@ Expected: `SUCCESS` for both.
 - [ ] **Step 5: Run the host tests**
 
 Run: `pio test -e native`
-Expected: `114 test cases: 114 succeeded`
+Expected: `115 test cases: 115 succeeded`
 
 - [ ] **Step 6: Verify on hardware that the saved name survives a reboot**
 
@@ -1705,7 +1714,7 @@ Expected: `SUCCESS` for both. If the DevKitC build fails on an unused `g_lastSam
 - [ ] **Step 8: Run the host tests**
 
 Run: `pio test -e native`
-Expected: `114 test cases: 114 succeeded`
+Expected: `115 test cases: 115 succeeded`
 
 - [ ] **Step 9: Update `README.md`**
 
