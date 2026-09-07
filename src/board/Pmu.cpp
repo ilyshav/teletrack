@@ -81,22 +81,9 @@ bool Pmu::begin() {
             g_pmu.isEnableALDO1(), g_pmu.isEnableALDO2(), g_pmu.isEnableALDO3(),
             g_pmu.isEnableALDO4(), g_pmu.isEnableBLDO1(), g_pmu.isEnableBLDO2());
 
-  // Which rail feeds the OLED panel is still unknown, and the panel supply is
-  // separate from the controller logic the I2C scan saw. Rather than guess a
-  // fourth time, switch every LDO on: they all carry voltages this board
-  // configured for itself, and they feed the display, LoRa, GPS and sensors.
-  // Once the screen lights up, the enable-state log above identifies which one
-  // was off and the rest can be dropped.
-  g_pmu.enableALDO1();
-  g_pmu.enableALDO2();
-  g_pmu.enableALDO3();
-  g_pmu.enableALDO4();
-  g_pmu.enableBLDO1();
-  g_pmu.enableBLDO2();
-
-  Log::info("pmu", "after:  ALDO1=%d ALDO2=%d ALDO3=%d ALDO4=%d BLDO1=%d BLDO2=%d",
-            g_pmu.isEnableALDO1(), g_pmu.isEnableALDO2(), g_pmu.isEnableALDO3(),
-            g_pmu.isEnableALDO4(), g_pmu.isEnableBLDO1(), g_pmu.isEnableBLDO2());
+  // No rail is enabled here. The boot log showed all six already on before we
+  // touched anything, so the dark panel was never a power problem -- it was
+  // the display talking to the magnetometer at 0x3C. Left as a report only.
 
   present_ = true;
   Log::info("pmu", "AXP2101 up");

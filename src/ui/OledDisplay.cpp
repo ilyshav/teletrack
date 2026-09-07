@@ -47,11 +47,20 @@ bool OledDisplay::begin() {
     Log::info("display", "using 0x%02X", addr);
   }
 
+  // The boot scan already brought Wire up on these pins, and u8g2's begin()
+  // initialises it again. Re-initialising the ESP32 I2C driver underneath
+  // itself wedges the bus -- begin() never returns, so nothing after this
+  // point in setup() runs. Release it and let u8g2 own the bus.
+  Wire.end();
+
   u8g2_.setBusClock(400000);
   u8g2_.setI2CAddress(addr << 1);  // u8g2 wants the address pre-shifted
+  Log::info("display", "u8g2 begin...");
   if (!u8g2_.begin()) {
+    Log::error("display", "u8g2 begin returned false");
     return false;
   }
+  Log::info("display", "u8g2 begin returned");
   u8g2_.setFont(u8g2_font_5x8_tr);  // 6x8 cell, 21 columns across 128 px
   u8g2_.clearBuffer();
   u8g2_.sendBuffer();
