@@ -975,240 +975,13 @@ git commit -m "Add ConfigPortal teardown so the radio can be released"
 
 ---
 
-### Task 5: NimBLE spike — prove the library and the link
+### Task 5: `BleLink` — RaceChrono BLE DIY peripheral
 
-**The riskiest task, isolated on purpose.** NimBLE 1.4.3 has never been compiled in
-this project, and the version constraint against Arduino core 2.0.17 is a claim that
-has not been tested. Find out here, in a task that adds one dependency and one
-advertising server, rather than inside a larger change.
-
-**Files:**
-- Modify: `platformio.ini` (`lib_deps`, `build_flags`)
-- Create: `src/ble/BleLink.h`, `src/ble/BleLink.cpp`
-
-**Interfaces:**
-- Consumes: `TelemetryRing` (Task 3), `Log`.
-- Produces:
-  - `class BleLink` — `bool begin(const char* deviceName, TelemetryRing& ring)`, `void end()`, `void tick(uint32_t nowMs)`, `bool connected() const`, `uint16_t mtu() const`, `uint32_t sentBytes() const`
-  - `BleLink::kServiceUuid`, `kLiveUuid`, `kStatusUuid`
-
-**If NimBLE 1.4.3 does not compile against this Arduino core, STOP and report it.**
-Do not switch to the bundled Bluedroid `BLE` library, do not bump the platform, and do
-not try NimBLE 2.x. Report the exact error — the fallback is a decision for the human,
-because bumping the platform risks the TFT and WiFi configuration that was just
-verified working on hardware.
-
-- [ ] **Step 1: Add the dependency and BLE tuning flags**
-
-In `platformio.ini`, `[env:esp]`, add to `lib_deps`:
-
-```ini
-    h2zero/NimBLE-Arduino@^1.4.3
-```
-
-and to `build_flags`:
-
-```ini
-    ; BLE throughput: without these the 30 kB/s budget does not close.
-    ; Extended advertising off (we advertise legacy), roles trimmed to peripheral.
-    -DCONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
-    -DCONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=517
-    -DCONFIG_BT_NIMBLE_ROLE_CENTRAL_DISABLED
-    -DCONFIG_BT_NIMBLE_ROLE_OBSERVER_DISABLED
-```
-
-Change nothing else in that file.
-
-- [ ] **Step 2: Write `src/ble/BleLink.h`**
-
-```cpp
-#pragma once
-
-#include <stddef.h>
-#include <stdint.h>
-
-#include "ble/TelemetryRing.h"
-
-// NimBLE peripheral: advertises, accepts one connection, and pumps batched
-// telemetry out as notifications.
-//
-// Device-only. Never added to [env:native]'s build_src_filter.
-class BleLink {
- public:
-  // Randomly generated, fixed for the life of the product.
-  static constexpr const char* kServiceUuid = "6f4a0001-3f2b-4d15-9c7e-1a2b3c4d5e6f";
-  static constexpr const char* kLiveUuid    = "6f4a0002-3f2b-4d15-9c7e-1a2b3c4d5e6f";
-  static constexpr const char* kStatusUuid  = "6f4a0003-3f2b-4d15-9c7e-1a2b3c4d5e6f";
-
-  // Largest notification we will build. Sized for a 517-byte MTU less the
-  // 3-byte ATT header, rounded down to a whole number of samples.
-  static constexpr size_t kMaxNotifyBytes = 500;
-
-  bool begin(const char* deviceName, TelemetryRing& ring);
-  void end();
-
-  // Call from loop(). Drains the ring into notifications.
-  void tick(uint32_t nowMs);
-
-  bool connected() const { return connected_; }
-  uint16_t mtu() const { return mtu_; }
-  uint32_t sentBytes() const { return sentBytes_; }
-
- private:
-  TelemetryRing* ring_ = nullptr;
-  bool connected_ = false;
-  uint16_t mtu_ = 23;  // ATT default until the client negotiates up
-  uint32_t sentBytes_ = 0;
-};
-```
-
-- [ ] **Step 3: Write `src/ble/BleLink.cpp`**
-
-```cpp
-#include "ble/BleLink.h"
-
-#include <NimBLEDevice.h>
-
-#include "core/Log.h"
-
-namespace {
-
-NimBLEServer* g_server = nullptr;
-NimBLECharacteristic* g_live = nullptr;
-NimBLECharacteristic* g_status = nullptr;
-bool g_connected = false;
-uint16_t g_mtu = 23;
-
-class ServerCallbacks : public NimBLEServerCallbacks {
-  void onConnect(NimBLEServer* server, ble_gap_conn_desc* desc) override {
-    g_connected = true;
-    // Ask for the shortest interval the client will accept: throughput is
-    // packets-per-interval, so the interval is the dominant term.
-    server->updateConnParams(desc->conn_handle, 6, 12, 0, 200);
-    Log::info("ble", "connected");
-  }
-
-  void onDisconnect(NimBLEServer* server) override {
-    g_connected = false;
-    g_mtu = 23;
-    Log::info("ble", "disconnected, advertising again");
-    NimBLEDevice::startAdvertising();
-  }
-
-  void onMTUChange(uint16_t mtu, ble_gap_conn_desc* desc) override {
-    g_mtu = mtu;
-    Log::info("ble", "mtu %u", (unsigned)mtu);
-  }
-};
-
-ServerCallbacks g_callbacks;
-
-}  // namespace
-
-bool BleLink::begin(const char* deviceName, TelemetryRing& ring) {
-  ring_ = &ring;
-
-  NimBLEDevice::init(deviceName);
-  NimBLEDevice::setMTU(517);
-  // 2M PHY doubles the symbol rate; without it the budget does not close.
-  NimBLEDevice::setDefaultPhy(BLE_GAP_LE_PHY_2M_MASK, BLE_GAP_LE_PHY_2M_MASK);
-
-  g_server = NimBLEDevice::createServer();
-  if (g_server == nullptr) {
-    Log::error("ble", "createServer failed");
-    return false;
-  }
-  // false = do not take ownership. g_callbacks is a static object in .bss, and
-  // NimBLEServer's destructor deletes the callbacks it owns, which asserts on a
-  // non-heap pointer when BleLink::end() calls NimBLEDevice::deinit().
-  g_server->setCallbacks(&g_callbacks, false);
-
-  NimBLEService* service = g_server->createService(kServiceUuid);
-  g_live = service->createCharacteristic(kLiveUuid, NIMBLE_PROPERTY::NOTIFY);
-  g_status = service->createCharacteristic(
-      kStatusUuid, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
-  service->start();
-
-  NimBLEAdvertising* advertising = NimBLEDevice::getAdvertising();
-  advertising->addServiceUUID(kServiceUuid);
-  advertising->setScanResponse(true);
-  if (!advertising->start()) {
-    // start() fails if the advertisement payload will not fit in 31 bytes.
-    // Logging success unconditionally would report a device that is on the
-    // air when it is not.
-    Log::error("ble", "advertising failed to start");
-    return false;
-  }
-
-  Log::info("ble", "advertising as %s", deviceName);
-  return true;
-}
-
-void BleLink::end() {
-  NimBLEDevice::stopAdvertising();
-  NimBLEDevice::deinit(true);
-  g_server = nullptr;
-  g_live = nullptr;
-  g_status = nullptr;
-  g_connected = false;
-  g_mtu = 23;
-  connected_ = false;
-  mtu_ = 23;
-  Log::info("ble", "stopped");
-}
-
-void BleLink::tick(uint32_t nowMs) {
-  connected_ = g_connected;
-  mtu_ = g_mtu;
-
-  if (!connected_ || ring_ == nullptr || g_live == nullptr) {
-    return;
-  }
-
-  // Fill one notification to just under the negotiated MTU. Batching is what
-  // keeps protocol overhead from eating the budget.
-  const size_t budget = (mtu_ > 3) ? static_cast<size_t>(mtu_ - 3) : 20;
-  const size_t limit = budget < kMaxNotifyBytes ? budget : kMaxNotifyBytes;
-
-  uint8_t buffer[kMaxNotifyBytes];
-  const size_t n = ring_->drain(buffer, limit);
-  if (n == 0) {
-    return;
-  }
-
-  g_live->setValue(buffer, n);
-  g_live->notify();
-  sentBytes_ += n;
-}
-```
-
-- [ ] **Step 4: Verify it compiles**
-
-```bash
-pio run -e esp
-```
-
-Expected: `SUCCESS`. Record the flash and RAM figures — NimBLE is the largest thing
-added in this phase.
-
-If it fails: **stop and report the exact error.** Do not substitute a different
-library or platform version.
-
-- [ ] **Step 5: Confirm the host build is untouched**
-
-```bash
-pio test -e native
-```
-
-Expected: 77 passing. `BleLink.cpp` must **not** be in `build_src_filter` — it
-includes `NimBLEDevice.h`.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add platformio.ini src/ble/BleLink.h src/ble/BleLink.cpp
-git commit -m "Add NimBLE peripheral with batched telemetry notifications"
-```
+**Superseded.** The original Task 5 built a custom GATT service with invented UUIDs and
+multi-sample batching sized for 30 kB/s. The telemetry consumer is RaceChrono, so the
+protocol is theirs. See Task 9 for the rewrite; the NimBLE dependency, the
+`platformio.ini` additions and the mode-switch teardown from the original task all
+stand and are already committed.
 
 ---
 
@@ -1529,168 +1302,100 @@ git commit -m "Wire mode switching, BLE and the screen together"
 
 ---
 
-### Task 8: Laptop receiver and the throughput measurement
+### Task 8: Superseded
 
-The deliverable of this phase is a measured number, and this is where it gets measured.
+The throughput measurement is no longer the deliverable. At one 20-byte fix per
+notification, 25 Hz is 500 B/s — there is nothing to measure. Replaced by Task 10.
+
+---
+
+### Task 9: `BleLink` targets the RaceChrono profile
+
+Rewrite `BleLink` to implement RaceChrono's published BLE DIY device profile, and send
+a synthetic fix that moves.
 
 **Files:**
-- Create: `tools/ble_throughput.py`
+- Modify: `src/ble/BleLink.h`, `src/ble/BleLink.cpp`
+- Modify: `src/ble/TelemetryRing.h`, `src/ble/TelemetryRing.cpp` (sample becomes an opaque 20-byte packet)
+- Modify: `test/native/test_telemetry_ring/test_telemetry_ring.cpp`
+- Create: `src/ble/RaceChronoGps.h`, `src/ble/RaceChronoGps.cpp` — the packet encoder, pure
+- Create: `test/native/test_racechrono_gps/test_racechrono_gps.cpp`
+- Modify: `platformio.ini` (`build_src_filter`)
+- Modify: `src/main.cpp` (produce a moving synthetic fix instead of filler)
+
+**Reference, vendored at `docs/reference/racechrono/`:**
+- `PROTOCOL.md` — the authoritative specification
+- `canbus-gps-device-main.ino` — a working reference implementation
+
+**Port the encoder from the reference implementation.** Do not reconstruct it from the
+specification text. The fine/coarse switchover for altitude and speed, the sync-bit
+increment rule and the big-endian byte order are all easy to get subtly wrong from
+prose, and a wrong encoding produces plausible but incorrect data in RaceChrono — the
+worst kind of bug, because it looks like it works.
+
+**Interfaces produced:**
+- `struct GpsFix { int32_t latE7; int32_t lonE7; float altitudeM; float speedKmh; float bearingDeg; float hdop; uint8_t fixQuality; uint8_t satellites; uint16_t year; uint8_t month, day, hour, minute, seconds; uint16_t millis; }`
+- `RaceChronoGps::encodeMain(const GpsFix&, uint8_t syncBits, uint8_t out[20])`
+- `RaceChronoGps::encodeTime(const GpsFix&, uint8_t syncBits, uint8_t out[3])`
+- `RaceChronoGps::dateAndHour(const GpsFix&)` → the 21-bit value whose change drives the sync counter
+- `BleLink::kServiceUuid = "00001ff8-0000-1000-8000-00805f9b34fb"`, `kGpsMainUuid = "00000003-..."`, `kGpsTimeUuid = "00000004-..."`
+
+**What the encoder must get right, each pinned by a test:**
+
+- Every multi-byte field is **big-endian**.
+- Altitude: fine `((m+500)*10) & 0x7FFF` below 2776.7 m, coarse `((m+500) & 0x7FFF) | 0x8000` at or above it.
+- Speed: fine `(km/h*100) & 0x7FFF` below 327.67 km/h, coarse `((km/h*10) & 0x7FFF) | 0x8000` at or above.
+- Sync bits are the top 3 bits of byte 0 in **both** characteristics and must be equal.
+- The sync counter increments when `dateAndHour` changes, not on every fix.
+- Unknown fields send their documented invalid value — `0xFF` for VDOP, `0x3F` for satellites, `0x7FFFFFFF` for latitude and longitude — never zero, which is a real coordinate.
+
+**Phase 2 payload:** `main.cpp` generates a fix that **moves** — a slow circle at
+walking pace with an advancing clock. A frozen point would prove the encoding parses
+but not that RaceChrono tracks updates, which is the question this phase exists to
+answer.
+
+`TelemetryRing` keeps its drop counting but now holds ready-to-send 20-byte packets;
+`TelemetrySample`'s `seq`/`uptimeMs`/`payload` split goes away, since a RaceChrono
+packet carries its own time.
+
+---
+
+### Task 10: Device name drives both radios
+
+`Settings::deviceName` is currently stored, validated, and used by nothing.
+
+**Files:**
+- Modify: `src/config/ConfigPortal.h`, `src/config/ConfigPortal.cpp` (SSID from settings; expose a rename-pending flag)
+- Modify: `src/config/internal/WebUi.cpp` (flag a rename on a successful save that changed the name)
+- Modify: `src/main.cpp` (act on the flag; pass the name to `BleLink::begin`)
+- Modify: `data/ui/index.html` (say that saving a new name restarts the radio)
+
+**Behaviour:** on a save that changes `deviceName`, the **active radio restarts
+immediately** with the new name. In WiFi mode that drops the browser — expected, and
+the page says so.
+
+**The ordering that matters:** the restart happens on the `loop()` tick *after* the
+HTTP response has been sent, never inside the request handler. Tearing down the AP
+mid-response means the client never sees its `{"ok":true}` and cannot tell a rename
+from a crash.
+
+---
+
+### Task 11: Verify against RaceChrono
+
+**Files:**
+- Create: `tools/ble_throughput.py` — renamed in spirit: a decoder, not a benchmark
 - Modify: `README.md`
 
-- [ ] **Step 1: Write `tools/ble_throughput.py`**
+The script subscribes to GPS main and **decodes the packet using the same field layout
+RaceChrono uses**, printing latitude, longitude, speed, bearing, fix quality and sync
+bits. Two independent decoders agreeing is real evidence the encoding is right, and a
+byte-order error shows up as a wrong number on a terminal rather than a silently wrong
+track in an app.
 
-```python
-"""Measure teletrack's BLE telemetry throughput from a laptop.
-
-    pip install bleak
-    python3 tools/ble_throughput.py [--seconds 30]
-
-Reports sustained kB/s, notification rate, and sample loss derived from
-sequence-number gaps.
-
-IMPORTANT: on macOS this measures a FLOOR, not the device's ceiling.
-CoreBluetooth negotiates the ATT MTU itself (typically 185 bytes, not 517) and
-gives applications no control over the connection interval, so expect roughly
-half the figure an Android client gets. Use this for repeatable regression
-checks; take the headline number from Android.
-"""
-
-import argparse
-import asyncio
-import struct
-import time
-
-from bleak import BleakClient, BleakScanner
-
-DEVICE_NAME = "teletrack"
-LIVE_UUID = "6f4a0002-3f2b-4d15-9c7e-1a2b3c4d5e6f"
-
-SAMPLE_SIZE = 20
-SEQ_OFFSET = 0
-
-
-class Stats:
-    def __init__(self):
-        self.notifications = 0
-        self.bytes = 0
-        self.samples = 0
-        self.first_seq = None
-        self.last_seq = None
-        self.gaps = 0
-
-    def feed(self, data: bytes) -> None:
-        self.notifications += 1
-        self.bytes += len(data)
-        for offset in range(0, len(data) - SAMPLE_SIZE + 1, SAMPLE_SIZE):
-            (seq,) = struct.unpack_from("<I", data, offset + SEQ_OFFSET)
-            self.samples += 1
-            if self.first_seq is None:
-                self.first_seq = seq
-            elif seq != self.last_seq + 1:
-                # Sequence numbers are assigned by the device before the ring
-                # can drop anything, so a gap is exactly the count lost.
-                self.gaps += seq - self.last_seq - 1
-            self.last_seq = seq
-
-    def report(self, elapsed: float, mtu: int) -> None:
-        expected = (self.last_seq - self.first_seq + 1) if self.first_seq is not None else 0
-        loss = (100.0 * self.gaps / expected) if expected else 0.0
-        print()
-        print(f"  negotiated MTU     {mtu} bytes")
-        print(f"  duration           {elapsed:.1f} s")
-        print(f"  throughput         {self.bytes / elapsed / 1024:.1f} kB/s")
-        print(f"  notifications      {self.notifications / elapsed:.0f}/s")
-        print(f"  samples received   {self.samples} ({self.samples / elapsed:.0f}/s)")
-        print(f"  samples lost       {self.gaps} ({loss:.2f}%)")
-        print()
-        if mtu < 200:
-            print("  NOTE: MTU under 200 means this host capped it (macOS/iOS do).")
-            print("        This is a floor. Measure on Android for the real number.")
-
-
-async def main(seconds: int) -> None:
-    print(f"scanning for {DEVICE_NAME!r}...")
-    device = await BleakScanner.find_device_by_name(DEVICE_NAME, timeout=15.0)
-    if device is None:
-        raise SystemExit(f"no device advertising as {DEVICE_NAME!r} found")
-
-    print(f"connecting to {device.address}...")
-    stats = Stats()
-    async with BleakClient(device) as client:
-        mtu = getattr(client, "mtu_size", 0)
-        print(f"connected, MTU {mtu}, collecting for {seconds}s")
-
-        await client.start_notify(LIVE_UUID, lambda _, data: stats.feed(data))
-        started = time.monotonic()
-        await asyncio.sleep(seconds)
-        elapsed = time.monotonic() - started
-        await client.stop_notify(LIVE_UUID)
-
-    stats.report(elapsed, mtu)
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--seconds", type=int, default=30)
-    asyncio.run(main(parser.parse_args().seconds))
-```
-
-- [ ] **Step 2: Install `bleak`**
-
-```bash
-python3 -m pip install bleak
-```
-
-- [ ] **Step 3: Flash and measure from the laptop**
-
-```bash
-pio run -e esp -t upload
-python3 tools/ble_throughput.py --seconds 30
-```
-
-Record the reported MTU, kB/s and loss percentage. On macOS expect an MTU near 185
-and roughly half the Android figure — that is the platform, not a fault.
-
-- [ ] **Step 4: Measure from Android — the headline number**
-
-Use nRF Connect (or any BLE client that requests a large MTU): connect to
-`teletrack`, subscribe to the `live` characteristic, and observe the throughput it
-reports.
-
-Record the negotiated MTU alongside the rate. **A rate without its MTU is not
-interpretable** — the acceptance target of ≥ 30 kB/s assumes a 517-byte MTU.
-
-- [ ] **Step 5: Manual acceptance**
-
-1. Power on → screen shows `BLE ADV` / `WAITING`.
-2. Connect a phone → `BLE CONN` with a live kB/s and a drop count.
-3. Disconnect → back to `BLE ADV`, device keeps running.
-4. Hold GPIO39 for 3 s → screen counts down, then `AP UP`; the Phase 1 config page is
-   reachable at `192.168.4.1`.
-5. Hold GPIO39 again → back to `BLE ADV`, and a phone can reconnect.
-6. Power-cycle → boots to `BLE ADV`.
-
-- [ ] **Step 6: Record the numbers in this plan**
-
-Append the measured figures to this file under a `## Measured results` heading:
-platform, negotiated MTU, sustained kB/s, loss percentage, date. A number nobody
-wrote down is a number nobody can regress against.
-
-- [ ] **Step 7: Update `README.md`**
-
-Add a Phase 2 line to the Status section, the mode-button behaviour, and the
-throughput tool under Building:
-
-```markdown
-| `python3 tools/ble_throughput.py` | Measure BLE throughput (needs `pip install bleak`) |
-```
-
-- [ ] **Step 8: Commit**
-
-```bash
-git add tools/ble_throughput.py README.md docs/superpowers/plans/2026-09-07-phase2-ble-telemetry.md
-git commit -m "Add BLE throughput measurement tool and record results"
-```
+**Acceptance is RaceChrono itself:** add the device as a RaceChrono DIY BLE device, and
+confirm it connects and shows a position that moves with a plausible speed and a valid
+time.
 
 ---
 
