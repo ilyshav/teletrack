@@ -136,6 +136,22 @@ theories for a dark panel whose actual fault was an I2C address collision.
 `GPS_RX_PIN 9`, `GPS_TX_PIN 8` (ESP32 side), `GPS_EN_PIN 7`, `GPS_PPS_PIN 6`.
 LilyGO's code never drives GPS_EN or PPS, so neither does ours.
 
+### The GPS baud rate is not knowable in advance
+
+LilyGO's board support defines `GPS_BAUD_RATE 9600`, u-blox M10 modules leave
+the factory at 38400, and LilyGO ship a recovery sketch that sweeps
+`{9600, 19200, 38400, 57600, 115200, ...}` precisely because it varies in the
+field. Our own firmware sets 115200 in the RAM layer, which survives a warm
+reset but not a power cycle.
+
+`GpsReceiver::begin()` therefore probes 115200, then 38400, then 9600, for
+250 ms each, and logs which answered. A silent receiver logs
+`gps: no response at any baud` and everything else carries on.
+
+Configuration goes to the **RAM layer only** (`CFG-VALSET layers = 0x01`), so
+the module is never permanently altered and a power cycle returns it to its
+own defaults.
+
 ---
 
 ## Serial
