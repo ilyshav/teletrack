@@ -20,6 +20,11 @@ inline constexpr uint8_t kModeButtonPin = 0;
 // Display, PMU and sensors share I2C bus 0.
 inline constexpr uint8_t kI2cSda = 17;
 inline constexpr uint8_t kI2cScl = 18;
+// A boot scan of 17/18 found the display and the BME280 but no AXP2101, so
+// the PMU is on a second bus. These are the candidate pins; the boot scan
+// reports what is actually there.
+inline constexpr uint8_t kPmuSda = 42;
+inline constexpr uint8_t kPmuScl = 41;
 
 #elif defined(BOARD_DEVKITC)
 

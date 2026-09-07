@@ -19,26 +19,33 @@ namespace {
 // boot turns "guess which rail and which address" into something readable on
 // serial. Expected: 0x34 AXP2101, 0x3C or 0x3D OLED, 0x1C magnetometer,
 // 0x6A/0x6B IMU, 0x76/0x77 BME280, 0x51 RTC.
-void scanI2c() {
+uint8_t scanBus(TwoWire& bus, const char* label, uint8_t sda, uint8_t scl) {
   uint8_t found = 0;
   for (uint8_t addr = 1; addr < 127; ++addr) {
-    Wire.beginTransmission(addr);
-    if (Wire.endTransmission() == 0) {
-      Log::info("i2c", "device at 0x%02X", addr);
+    bus.beginTransmission(addr);
+    if (bus.endTransmission() == 0) {
+      Log::info("i2c", "%s: device at 0x%02X", label, addr);
       ++found;
     }
   }
   if (found == 0) {
-    Log::error("i2c", "nothing on SDA=%u SCL=%u -- wrong pins?",
-               (unsigned)BoardConfig::kI2cSda, (unsigned)BoardConfig::kI2cScl);
+    Log::info("i2c", "%s: nothing on SDA=%u SCL=%u", label, (unsigned)sda,
+              (unsigned)scl);
   }
+  return found;
 }
 
 }  // namespace
 
 bool Pmu::begin() {
   Wire.begin(BoardConfig::kI2cSda, BoardConfig::kI2cScl);
-  scanI2c();
+  scanBus(Wire, "bus0", BoardConfig::kI2cSda, BoardConfig::kI2cScl);
+
+  // The first scan found the display and the BME280 but no AXP2101, IMU, RTC
+  // or magnetometer, which says this board splits its I2C across two buses.
+  // These pins are the next guess, and the scan reports rather than assumes.
+  Wire1.begin(BoardConfig::kPmuSda, BoardConfig::kPmuScl);
+  scanBus(Wire1, "bus1", BoardConfig::kPmuSda, BoardConfig::kPmuScl);
 
   if (!g_pmu.begin(Wire, AXP2101_SLAVE_ADDRESS, BoardConfig::kI2cSda,
                    BoardConfig::kI2cScl)) {
