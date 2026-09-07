@@ -9,10 +9,15 @@ Add a Bluetooth Low Energy link that streams telemetry to a phone, and a hardwar
 button that switches the device between BLE and the Phase 1 WiFi configuration
 portal. The two radios are mutually exclusive.
 
-Phase 2 streams **synthetic** telemetry at the real cadence and packet size. There is
-no GPS or IMU yet, so there is nothing genuine to send. The point is to establish the
-transport and **measure its actual throughput** before Phase 3 commits to a payload
-format. The deliverable is a number, not a demo.
+The telemetry consumer is **RaceChrono**, so the device implements RaceChrono's
+published BLE DIY device profile rather than a protocol of our own. That decision fixes
+the service UUID, the characteristic UUIDs and the exact byte layout of every payload —
+none of it is ours to choose.
+
+Phase 2 streams **synthetic** GPS fixes in RaceChrono's format at a realistic rate.
+There is no GPS module yet, so there is nothing genuine to send; the point is to prove
+RaceChrono connects, recognises the device and plots the data before Phase 3 puts a real
+receiver behind it.
 
 ### Out of scope
 
@@ -88,43 +93,33 @@ server, and calls `WiFi.softAPdisconnect(true)`.
 
 This is YAGNI working correctly: cut when unused, restored when a real caller appears.
 
-## 5. Throughput budget
+## 5. Data rate
 
-The target is **~30 kB/s sustained**: GPS at 25 Hz plus IMU at 100–200 Hz.
+**Far lower than an earlier draft of this spec assumed.** RaceChrono's GPS
+characteristic carries **one 20-byte fix per notification**. At 25 Hz that is
+**500 B/s** — under 1% of what BLE can carry.
 
-The intended client is an **Android phone**, which negotiates a 517-byte ATT MTU and
-short connection intervals. That puts 30 kB/s comfortably inside the practical
-ceiling of roughly 40–100 kB/s.
+The earlier draft targeted ~30 kB/s and mandated a 517-byte MTU, LE 2M PHY, Data
+Length Extension, a 7.5 ms connection interval and multi-sample batching. All of that
+was sized for a custom protocol carrying raw IMU data. Against RaceChrono's profile it
+is unnecessary, and the batching would be actively wrong — the format is one fix per
+packet.
 
-Every one of these is required; the budget does not close without them:
+What remains:
 
 - **NimBLE-Arduino 1.4.3** rather than the bundled Bluedroid `BLE` library — half the
   flash and about 100 KB less RAM. Version 1.4.3 specifically: this project is on
   `espressif32@7.0.1`, which resolves to Arduino core 2.0.17 (ESP-IDF 4.4), and the
-  NimBLE 2.x line requires Arduino core 3.x / IDF 5.x. 1.4.3 is the last release of
-  the 1.x line. Upgrading the platform to reach NimBLE 2.x is explicitly not worth it
-  here — the current platform pin is what the working TFT and WiFi configuration was
-  verified against.
-- **ATT MTU negotiated to 517**, so a full batch fits in one notification.
-- **LE 2M PHY** requested on connect.
-- **Data Length Extension** enabled.
-- **Connection interval 7.5–15 ms** requested.
-- **Notifications, not indications** — indications require a per-packet
-  acknowledgement and roughly halve throughput.
-- **Batching.** One sample per notification would spend the whole budget on protocol
-  overhead. Pack samples until the payload approaches the negotiated MTU, then send.
+  NimBLE 2.x line requires Arduino core 3.x / IDF 5.x. Upgrading the platform to reach
+  NimBLE 2.x is not worth it — the current pin is what the working TFT and WiFi
+  configuration was verified against.
+- **Notifications, not indications.**
+- The default 23-byte ATT MTU is already enough for a 20-byte payload. Negotiating
+  higher is harmless but earns nothing, so it is not required.
 
-### Client platform limits, recorded so the numbers are read correctly
-
-| Client | Max ATT MTU | Realistic sustained |
-| --- | --- | --- |
-| Android | 517 | 40–100 kB/s |
-| iOS / macOS | 185 | 15–40 kB/s |
-
-macOS and iOS share CoreBluetooth, which negotiates MTU itself and gives applications
-no control over the connection interval. A measurement taken on the laptop is
-therefore a **floor**, not the device's ceiling, and is expected to land at roughly
-half the Android figure. Both numbers get recorded, labelled with the platform.
+IMU data has no place in this API. RaceChrono's DIY profile carries GPS, CAN-bus and
+monitor values; the established way to carry IMU is as synthetic CAN packets on the
+CAN-bus characteristic. That is out of scope here and belongs with the real sensors.
 
 ## 6. Backpressure and dropped samples
 
@@ -143,31 +138,77 @@ Every sample carries a **sequence number**. The receiver detects exactly which s
 were lost rather than inferring loss from a byte count — that is what makes the
 measurement trustworthy.
 
-## 7. GATT layout
+## 7. GATT layout — RaceChrono BLE DIY profile
 
-One service, two characteristics. UUIDs are 128-bit randoms fixed in
-`BleLink.h`; the advertised device name is `teletrack`.
+**None of this is ours to choose.** The service, the characteristic UUIDs and every
+byte of every payload are defined by RaceChrono. The specification and a working
+reference implementation are vendored at `docs/reference/racechrono/`.
 
-### `live` — notify
-
-Batched samples, packed binary, sized to the negotiated MTU. Each sample:
-
-| Field | Type | Meaning |
+| | UUID | Properties |
 | --- | --- | --- |
-| `seq` | `uint32` | monotonic, gap = loss |
-| `uptimeMs` | `uint32` | device uptime at capture |
-| `payload` | `uint8[N]` | Phase 2: filler. Phase 3: real telemetry |
+| Service | `00001ff8-0000-1000-8000-00805f9b34fb` (0x1FF8) | — |
+| GPS main | `0x0003` | READ, NOTIFY — 20 bytes |
+| GPS time | `0x0004` | READ, NOTIFY — 3 bytes |
 
-Sample size is a compile-time constant chosen so a batch fills the MTU.
+CAN-bus (`0x0001`, `0x0002`) and monitor (`0x0005`, `0x0006`) are **out of scope for
+Phase 2**. They are where IMU data will eventually go, as synthetic CAN packets.
 
-### `status` — read / notify
+### Encoding
 
-JSON, reusing the Phase 1 `ConfigApi` style:
+All multi-byte values are **big-endian** — the opposite of the native layout, and the
+single easiest thing to get wrong here. (The CAN packet ID is little-endian, but we do
+not implement CAN.)
 
-```json
-{ "mode": "ble", "uptimeMs": 134221, "freeHeap": 186432,
-  "mtu": 517, "connIntervalMs": 15, "sent": 84213, "dropped": 12 }
-```
+**GPS main, 20 bytes:**
+
+| Bytes | Field |
+| --- | --- |
+| 0–2 | sync bits (3) + time from hour start (21) = `minute*30000 + seconds*500 + ms/2` |
+| 3 | fix quality (2 bits) + locked satellites (6 bits, invalid `0x3F`) |
+| 4–7 | latitude, degrees × 10⁷, signed two's complement, invalid `0x7FFFFFFF` |
+| 8–11 | longitude, same encoding |
+| 12–13 | altitude — fine: `((m+500)*10) & 0x7FFF`; coarse: `((m+500) & 0x7FFF) \| 0x8000` |
+| 14–15 | speed — fine: `(km/h*100) & 0x7FFF`; coarse: `((km/h*10) & 0x7FFF) \| 0x8000` |
+| 16–17 | bearing, degrees × 100, invalid `0xFFFF` |
+| 18 | HDOP × 10, invalid `0xFF` |
+| 19 | VDOP × 10, invalid `0xFF` |
+
+**GPS time, 3 bytes:** sync bits (3) + `(year-2000)*8928 + (month-1)*744 + (day-1)*24 + hour` (21 bits).
+
+**Sync bits** are a 3-bit counter that increments **whenever the GPS-time value
+changes**, and must be identical in both characteristics. RaceChrono compares them and
+waits if they disagree, so getting this wrong stalls the client rather than corrupting
+a value.
+
+**Fine vs coarse switchover:** the reference hands over as soon as the fine encoding
+overflows its 15 bits — above 2776.7 m and above 327.67 km/h. Switching later leaves
+values that wrap and decode as plausible but wrong numbers.
+
+**Port the encoder from `docs/reference/racechrono/canbus-gps-device-main.ino`
+verbatim.** Do not reconstruct it from the table above; the table is for reading, the
+reference is for building.
+
+### Phase 2 payload
+
+No GPS receiver exists yet, so Phase 2 sends a **synthetic fix that moves**: a slow
+circle at walking pace with a valid time, a fix quality of 1 and a plausible satellite
+count. A frozen point would prove the encoding parses but not that RaceChrono tracks
+updates. Fields we cannot know send their documented invalid value rather than zero —
+zero is a real coordinate.
+
+## 7a. Device name
+
+`Settings::deviceName` drives **both** the AP SSID and the BLE advertised name, and
+takes effect **immediately** on save: the active radio is torn down and restarted with
+the new name.
+
+Saving a new name from the web page therefore **drops the browser** — the AP it was
+connected through has gone. That is the accepted cost of immediate application, and the
+page says so next to the field. The restart happens on the loop tick *after* the HTTP
+response has been sent, so the client sees its `{"ok":true}` before the connection goes.
+
+Until now `deviceName` was stored and validated but never used by anything, which made
+it a setting that silently did nothing.
 
 ## 8. Screen
 
@@ -184,34 +225,34 @@ While the mode button is held, the header shows a countdown to the 3-second mark
 
 In BLE mode there is no web UI, so the screen is the only feedback the device gives.
 
-## 9. Measuring throughput
+## 9. Verifying the link
 
-### `tools/ble_throughput.py`
+The deliverable is no longer a throughput number — at 500 B/s there is nothing to
+measure. It is **RaceChrono accepting the device and plotting a moving position.**
 
-A Python script using **`bleak`**, run from the laptop. It:
+### Primary: RaceChrono on Android
 
-1. Scans for a device advertising as `teletrack` and connects.
-2. Reports the **negotiated MTU** — the single most important number for interpreting
-   the result.
-3. Subscribes to `live` and consumes notifications for a fixed window (default 30 s).
-4. Reports sustained **kB/s**, notifications per second, samples per second, and
-   **loss percentage derived from sequence gaps**.
+Add the device as a "RaceChrono DIY" BLE device. It must appear in RaceChrono's own
+scan (not the OS Bluetooth pane — a BLE peripheral with a custom service never appears
+there), connect, and show a position that moves along the synthetic path with a
+plausible speed and a valid time.
 
-It is checked into the repository so the measurement is repeatable rather than a
-one-off reading someone remembers.
+This is the acceptance test. Anything else is a proxy for it.
 
-`bleak` is not currently installed; the script's header documents `pip install bleak`.
+### Secondary: `tools/ble_throughput.py`
 
-### Acceptance
+A `bleak` script run from the laptop, kept for regression rather than performance. It
+subscribes to GPS main, **decodes the 20-byte packet with the same field layout
+RaceChrono uses**, and prints the decoded latitude, longitude, speed, bearing, fix
+quality and sync bits along with the notification rate.
 
-- **Android, via nRF Connect or an equivalent:** the headline number. Target
-  ≥ 30 kB/s sustained with < 1% loss.
-- **macOS, via `tools/ble_throughput.py`:** the regression floor. Expected roughly
-  half the Android figure. A large drop between runs signals a regression even though
-  the absolute value is limited by the platform.
+That decode is the point: it catches a byte-order or bit-packing error immediately and
+locally, where the symptom is a wrong number on a terminal rather than a silently wrong
+track in an app. Two independent decoders agreeing is decent evidence the encoding is
+right.
 
-Both figures and the MTU each was measured at are recorded in the implementation plan
-when the task runs.
+`bleak` is not a project dependency; the script's header documents `pip install bleak`,
+and on a PEP 668 system it needs a virtualenv.
 
 ## 10. Failure handling
 
@@ -253,10 +294,11 @@ BLE.
 ## 12. Success criteria
 
 - [ ] Device boots into BLE mode and advertises as `teletrack` within 3 s.
-- [ ] An Android client connects, negotiates a 517-byte MTU, and receives notifications.
-- [ ] Sustained throughput ≥ 30 kB/s with < 1% sequence loss, measured and recorded.
-- [ ] `tools/ble_throughput.py` produces a repeatable measurement from the laptop.
-- [ ] Dropped samples are counted, exposed in `status`, and shown on screen.
+- [ ] RaceChrono discovers the device in its own scan and connects to it.
+- [ ] RaceChrono shows a position that moves, with a plausible speed and a valid time.
+- [ ] `tools/ble_throughput.py` decodes the packet and its values match what RaceChrono shows.
+- [ ] Dropped samples are counted and shown on screen.
+- [ ] Changing `deviceName` renames both the AP SSID and the BLE name on save.
 - [ ] Holding GPIO39 for 3 s switches to WiFi and the Phase 1 portal works unchanged.
 - [ ] GPIO39 held 3 s toggles the mode, once the button is wired.
 - [ ] The screen always shows the current mode.
