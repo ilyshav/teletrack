@@ -213,6 +213,10 @@ void setup() {
     Log::info("display", "init ok");
   }
 
+  // Before any radio starts: the boot mode is BLE, so the portal -- which
+  // used to be the only thing that read NVS -- may never run at all.
+  app.portal.loadSettings();
+
   app.button.begin();
   startCurrentMode();
 }

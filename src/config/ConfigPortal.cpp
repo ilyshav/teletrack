@@ -8,16 +8,20 @@
 ConfigPortal::ConfigPortal(Settings& settings)
     : settings_(settings), server_(kHttpPort), web_(settings, store_, *this) {}
 
-bool ConfigPortal::begin() {
+void ConfigPortal::loadSettings() {
   if (!store_.begin()) {
     Log::error("nvs", "storage unavailable, changes will not persist");
-  } else if (store_.load(settings_)) {
+    return;
+  }
+  if (store_.load(settings_)) {
     Log::info("cfg", "loaded name=%s hz=%u", settings_.deviceName,
               (unsigned)settings_.sampleHz);
   } else {
     Log::info("cfg", "no stored settings, using defaults");
   }
+}
 
+bool ConfigPortal::begin() {
   if (!ap_.begin(settings_.deviceName, kChannel, kMaxClients)) {
     return false;
   }

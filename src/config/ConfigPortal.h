@@ -23,9 +23,14 @@ class ConfigPortal {
 
   explicit ConfigPortal(Settings& settings);
 
-  // Loads persisted settings, starts the AP (SSID = settings.deviceName), DNS
-  // and HTTP server. Returns false only when the AP itself could not start —
-  // a storage failure is survivable and is reported in the log.
+  // Reads saved settings from NVS. Called from setup() before any radio
+  // starts: the device boots into BLE mode, where begin() never runs, so
+  // loading inside begin() meant a BLE-mode boot silently used defaults.
+  void loadSettings();
+
+  // Starts the AP (SSID = settings.deviceName), DNS and HTTP server. Returns
+  // false only when the AP itself could not start — a storage failure is
+  // survivable and is reported in the log.
   bool begin();
 
   // Call from loop().
