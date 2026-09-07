@@ -12,8 +12,33 @@ namespace {
 XPowersPMU g_pmu;
 }  // namespace
 
+namespace {
+
+// Six I2C devices live on this board and every board-specific value in this
+// branch came from documentation rather than measurement. Scanning once at
+// boot turns "guess which rail and which address" into something readable on
+// serial. Expected: 0x34 AXP2101, 0x3C or 0x3D OLED, 0x1C magnetometer,
+// 0x6A/0x6B IMU, 0x76/0x77 BME280, 0x51 RTC.
+void scanI2c() {
+  uint8_t found = 0;
+  for (uint8_t addr = 1; addr < 127; ++addr) {
+    Wire.beginTransmission(addr);
+    if (Wire.endTransmission() == 0) {
+      Log::info("i2c", "device at 0x%02X", addr);
+      ++found;
+    }
+  }
+  if (found == 0) {
+    Log::error("i2c", "nothing on SDA=%u SCL=%u -- wrong pins?",
+               (unsigned)BoardConfig::kI2cSda, (unsigned)BoardConfig::kI2cScl);
+  }
+}
+
+}  // namespace
+
 bool Pmu::begin() {
   Wire.begin(BoardConfig::kI2cSda, BoardConfig::kI2cScl);
+  scanI2c();
 
   if (!g_pmu.begin(Wire, AXP2101_SLAVE_ADDRESS, BoardConfig::kI2cSda,
                    BoardConfig::kI2cScl)) {
