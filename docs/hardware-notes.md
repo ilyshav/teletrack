@@ -282,6 +282,26 @@ quarter second at exactly the moment a central is discovering services.
 advertising itself as soon as the callback returns; calling it again just fails
 with `EALREADY`.
 
+### RaceChrono connects and drops every two seconds, with no data in between
+
+**Symptom:** a metronomic `connected` / `disconnected, advertising again` cycle
+about two seconds apart, on both boards, with the GPS reporting 0 satellites.
+
+**Cause:** the firmware was withholding every packet until the receiver reported
+`validDate && validTime`. Indoors the receiver never resolves time, so nothing was
+ever sent. RaceChrono subscribes, waits, receives nothing, and drops the link —
+which is reasonable behaviour on its part.
+
+**Fix:** send the fix regardless. A packet with `fixQuality = 0` says "still
+acquiring" and keeps the client connected while the receiver works; silence says
+nothing and reads as a dead device. This is what the reference implementation
+does, and departing from it was the mistake.
+
+**Related:** HDOP is one byte holding `dop * 10`, so 0.0 to 25.4, with 0xFF meaning
+invalid. A u-blox receiver with no fix reports pDOP 99.99, which encoded naively
+wraps to 232 and reads as a confident 23.2. It is clamped to 0xFF now. This never
+showed up while the synthetic fix hardcoded `hdop = 1.0`.
+
 ### NimBLE version
 
 Pin **`h2zero/NimBLE-Arduino@^1.4.3`**. The 2.x line requires Arduino core 3.x / ESP-IDF

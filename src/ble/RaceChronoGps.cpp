@@ -65,7 +65,11 @@ void RaceChronoGps::encodeMain(const GpsFix& fix, uint8_t syncBits, uint8_t out[
   out[15] = static_cast<uint8_t>(speed);
   out[16] = static_cast<uint8_t>(bearing >> 8);
   out[17] = static_cast<uint8_t>(bearing);
-  out[18] = static_cast<uint8_t>(lroundf(fix.hdop * 10.0f));
+  // 0x00..0xFE is 0.0..25.4; 0xFF is the documented invalid value. A u-blox
+  // receiver with no fix reports pDOP 99.99, which would wrap to 232 and read
+  // as a confident 23.2. Say "unknown" rather than something plausible.
+  const long dop = lroundf(fix.hdop * 10.0f);
+  out[18] = (dop < 0 || dop > 0xFE) ? 0xFF : static_cast<uint8_t>(dop);
   out[19] = 0xFF;  // VDOP: unimplemented, per the reference, which always
                     // sends the documented invalid value here.
 }

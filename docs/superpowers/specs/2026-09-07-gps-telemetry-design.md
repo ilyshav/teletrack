@@ -192,14 +192,23 @@ substitution is commented at the assignment.
 **Satellites are always reported**, fix or no fix. Before a lock this is exactly
 what tells you the receiver is alive and working, and it is what the screen shows.
 
-### We withhold packets until the receiver's clock is valid
+### We transmit whether or not the clock is valid — reversed on hardware
 
-Unlike the reference — which transmits whatever its parser last produced — nothing
-is sent to RaceChrono until `validDate && validTime` are both set. A GPS timestamp
-is the axis every sample is placed on, and feeding RaceChrono a wrong one is the
-leading hypothesis for the bug in §1. The receiver's time goes valid well before it
-has a position fix, so this costs nothing in practice. Until then the display shows
-acquisition progress and BLE stays quiet.
+The design originally withheld every packet until `validDate && validTime`, on the
+theory that a wrong timestamp was what stopped RaceChrono locking. **That was wrong
+and it made things worse.** Indoors a receiver never resolves time, so the device
+sent nothing at all, and RaceChrono dropped the connection after roughly two
+seconds of silence and retried — a connect/disconnect cycle with no data ever
+crossing it.
+
+The reference sends whatever it last parsed, and that is correct: a fix carrying
+`fixQuality = 0` tells a client "still acquiring", where silence tells it nothing
+and looks like a dead device.
+
+The sync bits stay coherent across the transition. Before the clock resolves,
+`dateAndHour` is 0, which `updateSyncBits` treats as "no previous fix" and leaves
+the counter alone — so both characteristics read 0. The first real timestamp bumps
+it exactly once.
 
 ## 6. Sample rate follows the setting
 

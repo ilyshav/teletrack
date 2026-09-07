@@ -187,6 +187,21 @@ static void test_unknown_satellites_send_0x3f_not_zero() {
   TEST_ASSERT_NOT_EQUAL(0, out[3]);
 }
 
+static void test_out_of_range_hdop_sends_the_invalid_value() {
+  // A receiver with no fix reports pDOP 99.99. Encoded naively that is 1000,
+  // which truncates to 232 and reads as a precise 23.2.
+  GpsFix fix = makeFix();
+  fix.hdop = 99.99f;
+  uint8_t out[20];
+  RaceChronoGps::encodeMain(fix, 0, out);
+  TEST_ASSERT_EQUAL_UINT8(0xFF, out[18]);
+
+  // The top of the representable range still encodes as itself.
+  fix.hdop = 25.4f;
+  RaceChronoGps::encodeMain(fix, 0, out);
+  TEST_ASSERT_EQUAL_UINT8(254, out[18]);
+}
+
 static void test_vdop_is_always_the_invalid_value() {
   // The reference has no VDOP source and always sends 0xFF; ported as-is.
   GpsFix a = makeFix();
@@ -295,6 +310,7 @@ int main(int, char**) {
   RUN_TEST(test_speed_coarse_just_above_threshold);
   RUN_TEST(test_unknown_lat_lon_send_invalid_sentinel_not_zero);
   RUN_TEST(test_unknown_satellites_send_0x3f_not_zero);
+  RUN_TEST(test_out_of_range_hdop_sends_the_invalid_value);
   RUN_TEST(test_vdop_is_always_the_invalid_value);
   RUN_TEST(test_encode_time_is_big_endian_and_matches_date_and_hour);
   RUN_TEST(test_sync_bits_are_identical_between_main_and_time);

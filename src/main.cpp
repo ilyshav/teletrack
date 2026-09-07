@@ -195,9 +195,19 @@ void publishFix(const GpsFix& fix) {
 // is valid -- a wrong timestamp is the axis every sample would be placed on.
 void produceSample(uint32_t nowMs, bool newFix) {
   (void)nowMs;
-  if (!newFix || !app.gpsRx.timeValid()) {
+  if (!newFix) {
     return;
   }
+  // Sent whether or not the receiver's clock is valid yet. Withholding until
+  // it was cost us the connection outright: indoors the receiver never
+  // resolves time, so the device fell silent and RaceChrono dropped the link
+  // after about two seconds of nothing, over and over. The reference sends
+  // whatever it last parsed, and a fix carrying quality 0 is how a client is
+  // told "still acquiring" -- silence says nothing at all.
+  //
+  // The sync bits stay coherent through this: before the clock resolves,
+  // dateAndHour is 0 and updateSyncBits leaves the counter alone, so both
+  // characteristics read 0. The first real timestamp bumps it exactly once.
   publishFix(app.gpsRx.fix());
 }
 
