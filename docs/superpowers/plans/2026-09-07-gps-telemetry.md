@@ -523,12 +523,12 @@ void UbxParser::decodePvt() {
 - [ ] **Step 6: Run the test to verify it passes**
 
 Run: `pio test -e native -f native/test_ubx_parser`
-Expected: `8 test cases: 8 succeeded`
+Expected: `10 test cases: 10 succeeded`
 
 - [ ] **Step 7: Run the whole suite**
 
 Run: `pio test -e native`
-Expected: `103 test cases: 103 succeeded`
+Expected: `105 test cases: 105 succeeded`
 
 - [ ] **Step 8: Commit**
 
@@ -789,12 +789,12 @@ void UbxParser::decodePvt() {
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `pio test -e native -f native/test_ubx_parser`
-Expected: `17 test cases: 17 succeeded`
+Expected: `19 test cases: 19 succeeded`
 
 - [ ] **Step 5: Run the whole suite**
 
 Run: `pio test -e native`
-Expected: `112 test cases: 112 succeeded`
+Expected: `114 test cases: 114 succeeded`
 
 - [ ] **Step 6: Commit**
 
@@ -1211,7 +1211,7 @@ Expected: `SUCCESS` for both.
 - [ ] **Step 4: Confirm the parser stayed out of the native build's way**
 
 Run: `pio test -e native`
-Expected: `112 test cases: 112 succeeded`. `GpsReceiver.cpp` is not in `[env:native]`'s `build_src_filter` and must not be added — it includes Arduino.
+Expected: `114 test cases: 114 succeeded`. `GpsReceiver.cpp` is not in `[env:native]`'s `build_src_filter` and must not be added — it includes Arduino.
 
 - [ ] **Step 5: Record the baud finding in `docs/hardware-notes.md`**
 
@@ -1429,7 +1429,7 @@ Expected: `SUCCESS` for both. The TFT is untouched, so the DevKitC still shows i
 - [ ] **Step 6: Run the host tests**
 
 Run: `pio test -e native`
-Expected: `112 test cases: 112 succeeded`
+Expected: `114 test cases: 114 succeeded`
 
 - [ ] **Step 7: Commit**
 
@@ -1528,7 +1528,7 @@ Expected: `SUCCESS` for both.
 - [ ] **Step 5: Run the host tests**
 
 Run: `pio test -e native`
-Expected: `112 test cases: 112 succeeded`
+Expected: `114 test cases: 114 succeeded`
 
 - [ ] **Step 6: Verify on hardware that the saved name survives a reboot**
 
@@ -1705,7 +1705,7 @@ Expected: `SUCCESS` for both. If the DevKitC build fails on an unused `g_lastSam
 - [ ] **Step 8: Run the host tests**
 
 Run: `pio test -e native`
-Expected: `112 test cases: 112 succeeded`
+Expected: `114 test cases: 114 succeeded`
 
 - [ ] **Step 9: Update `README.md`**
 

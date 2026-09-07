@@ -20,6 +20,9 @@ class UbxParser {
   static constexpr uint8_t kClassNav = 0x01;
   static constexpr uint8_t kIdPvt = 0x07;
   static constexpr size_t kPvtLength = 92;
+  // Generous upper bound on any message this receiver is configured to send;
+  // a declared length beyond it means the stream is desynchronised.
+  static constexpr uint16_t kMaxPayload = 1024;
 
   // Feeds one byte. Returns true on the byte that completes a valid NAV-PVT
   // frame, at which point fix() and timeValid() hold the decoded result.
@@ -56,7 +59,6 @@ class UbxParser {
   // The byte before this one. A 0xB5,0x62 pair appearing anywhere past the
   // initial sync -- e.g. a fresh frame arriving right behind one that got
   // truncated -- means a new frame is starting, whatever state we were in.
-  uint8_t prevByte_ = 0;
   GpsFix fix_;
   bool timeValid_ = false;
   uint32_t checksumErrors_ = 0;

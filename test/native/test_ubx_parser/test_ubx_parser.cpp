@@ -140,11 +140,49 @@ static void test_leading_garbage_is_skipped() {
   TEST_ASSERT_EQUAL_INT(1, feedAll(parser, f.bytes, f.len));
 }
 
-static void test_a_truncated_frame_does_not_block_the_next_one() {
+static void test_a_truncated_frame_costs_one_more_frame_then_recovers() {
   UbxParser parser;
+
+  // 40 bytes of a 100-byte frame: 6 of header and 34 of payload, leaving the
+  // parser waiting for 58 more payload bytes and 2 of checksum.
   const Frame truncated = makePvtFrame();
-  // Half a frame, then a whole one. The parser must recover.
   TEST_ASSERT_EQUAL_INT(0, feedAll(parser, truncated.bytes, 40));
+
+  // Those 60 bytes come out of the NEXT frame, which is therefore lost -- its
+  // tail fails the checksum of the frame it was mistaken for. This is the
+  // correct cost: a parser must not go hunting for sync bytes inside a
+  // declared payload, because payload bytes are arbitrary binary and a
+  // B5 62 pair occurs there roughly once every 720 frames.
+  const Frame first = makePvtFrame();
+  const Frame second = makePvtFrame();
+  const int accepted = feedAll(parser, first.bytes, first.len) +
+                       feedAll(parser, second.bytes, second.len);
+  TEST_ASSERT_EQUAL_INT(1, accepted);
+  TEST_ASSERT_EQUAL_UINT32(1, parser.checksumErrors());
+}
+
+static void test_a_payload_containing_a_sync_pair_still_frames() {
+  // Longitude 0x62B50000 is 165.5701504 degrees east -- Vanuatu -- and puts a
+  // literal B5 62 at payload offsets 26 and 27. A parser that rescans for sync
+  // inside a payload would abandon this frame and report nothing.
+  PvtFields fields;
+  fields.lon = 0x62B50000;
+  const Frame f = makePvtFrame(fields);
+  TEST_ASSERT_EQUAL_UINT8(0xB5, f.bytes[6 + 26]);
+  TEST_ASSERT_EQUAL_UINT8(0x62, f.bytes[6 + 27]);
+
+  UbxParser parser;
+  TEST_ASSERT_EQUAL_INT(1, feedAll(parser, f.bytes, f.len));
+  TEST_ASSERT_EQUAL_UINT32(0, parser.checksumErrors());
+}
+
+static void test_an_absurd_declared_length_does_not_swallow_the_stream() {
+  UbxParser parser;
+  // A header claiming a 0x2000-byte payload. Only reachable from a
+  // desynchronised stream, but without a bound it would eat 8 kB -- most of a
+  // second at 115200 baud -- and every frame inside that window.
+  const uint8_t bogus[6] = {0xB5, 0x62, 0x01, 0x07, 0x00, 0x20};
+  TEST_ASSERT_EQUAL_INT(0, feedAll(parser, bogus, sizeof(bogus)));
 
   const Frame good = makePvtFrame();
   TEST_ASSERT_EQUAL_INT(1, feedAll(parser, good.bytes, good.len));
@@ -196,7 +234,9 @@ int main(int, char**) {
   RUN_TEST(test_a_valid_frame_is_accepted_on_its_last_byte);
   RUN_TEST(test_a_flipped_payload_byte_is_rejected);
   RUN_TEST(test_leading_garbage_is_skipped);
-  RUN_TEST(test_a_truncated_frame_does_not_block_the_next_one);
+  RUN_TEST(test_a_truncated_frame_costs_one_more_frame_then_recovers);
+  RUN_TEST(test_a_payload_containing_a_sync_pair_still_frames);
+  RUN_TEST(test_an_absurd_declared_length_does_not_swallow_the_stream);
   RUN_TEST(test_doubled_sync_byte_still_syncs);
   RUN_TEST(test_another_ubx_message_is_consumed_but_not_reported);
   RUN_TEST(test_a_message_longer_than_navpvt_does_not_overflow);

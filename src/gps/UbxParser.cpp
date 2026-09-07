@@ -1,22 +1,6 @@
 #include "gps/UbxParser.h"
 
 bool UbxParser::feed(uint8_t byte) {
-  const uint8_t prev = prevByte_;
-  prevByte_ = byte;
-
-  // Mid-frame states have no timeout to fall back on, so this is the only
-  // signal that the frame in progress is dead: a real sync pair can't occur
-  // inside a well-formed one, so seeing one means whatever came before was
-  // truncated or corrupt. Restart as if sync had just been recognized.
-  if (state_ != State::Sync1 && state_ != State::Sync2 && prev == kSync1 &&
-      byte == kSync2) {
-    state_ = State::Class;
-    ckA_ = 0;
-    ckB_ = 0;
-    index_ = 0;
-    return false;
-  }
-
   switch (state_) {
     case State::Sync1:
       if (byte == kSync1) {
@@ -58,6 +42,15 @@ bool UbxParser::feed(uint8_t byte) {
       ckA_ += byte;
       ckB_ += ckA_;
       index_ = 0;
+      // A length is only ever trusted this far. Resyncing inside a truncated
+      // frame lands on arbitrary payload bytes, and a length read from those
+      // can be up to 0xFFFF -- 65 kB, nearly six seconds of silence at 115200
+      // baud. Anything past the largest message this receiver is configured to
+      // emit is desync, not a message: drop back to hunting for sync.
+      if (length_ > kMaxPayload) {
+        state_ = State::Sync1;
+        return false;
+      }
       state_ = (length_ == 0) ? State::CkA : State::Payload;
       return false;
 
