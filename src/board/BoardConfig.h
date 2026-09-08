@@ -34,6 +34,14 @@ inline constexpr uint8_t kGpsTxPin = 8;
 // neither is defined here. If the receiver is silent at every baud with
 // ALDO4 confirmed on, GPIO 7 is the first thing to try.
 
+// SN65HVD230 transceiver. Unclaimed by LilyGO's map for this board, not
+// strapping pins, not USB, not flash. NOT 17 and 18 -- those are this board's
+// I2C bus and the display lives on them. Named from the ESP32's point of view:
+// kCanTxPin drives the transceiver's TX input, which is never asserted --
+// the controller runs listen-only and the peripheral merely requires a pin.
+inline constexpr uint8_t kCanTxPin = 15;
+inline constexpr uint8_t kCanRxPin = 16;
+
 #elif defined(BOARD_DEVKITC)
 
 inline constexpr const char* kBoardName = "ESP32-S3-DevKitC-1";
