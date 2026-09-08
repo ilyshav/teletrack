@@ -112,20 +112,18 @@ void OledDisplay::draw(const DeviceStatus& status) {
   // Which radio is running, and nothing about who is connected to it. The
   // client and drop counts are in /api/status, which is where they are read.
   char right[kCols + 1];
-  if (status.holdMs > 0) {
-    // Not a connection detail: the only feedback that a three-second hold is
-    // registering at all. Without it the button feels broken.
-    // heldMs() keeps counting while the button is down -- fired_ stops the
-    // switch repeating, not the timer -- so holdMs runs past kHoldMs whenever
-    // the button is held a moment longer than three seconds, which is every
-    // time. Unsigned subtraction then wrapped to ~4.29 billion and printed
-    // "HOLD 4294966s", 13 columns, which collides with the battery on a
-    // 21-column panel. Clamp, and use a ceiling divide so it counts 3, 2, 1.
-    const uint32_t remainingMs = status.holdMs >= HoldDetector::kHoldMs
-                                     ? 0u
-                                     : HoldDetector::kHoldMs - status.holdMs;
+  // Only while the countdown is actually running. heldMs() keeps counting for
+  // as long as the button is down -- fired_ stops the switch repeating, not
+  // the timer -- so past kHoldMs the switch has already happened and the new
+  // radio is the useful thing to show. Bounding it here also keeps the
+  // unsigned subtraction below from wrapping to ~4.29 billion and printing
+  // "HOLD 4294966s", which is 13 columns on a 21-column panel.
+  if (status.holdMs > 0 && status.holdMs < HoldDetector::kHoldMs) {
+    // The only feedback that a three-second hold is registering at all.
+    // Ceiling divide so it counts down 3, 2, 1 rather than 4, 3, 2.
     snprintf(right, sizeof(right), "HOLD %lus",
-             static_cast<unsigned long>((remainingMs + 999u) / 1000u));
+             static_cast<unsigned long>(
+                 (HoldDetector::kHoldMs - status.holdMs + 999u) / 1000u));
   } else {
     snprintf(right, sizeof(right), "%s",
              status.mode == RadioMode::Wifi ? "AP" : "BLE");
