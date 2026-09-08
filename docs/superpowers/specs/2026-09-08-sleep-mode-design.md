@@ -21,7 +21,7 @@ T-Beam Supreme only. The ESP32-S3-DevKitC-1 has no PMU and no power button.
 - **Sleeping the GPS while the rest runs.** That is a power optimisation for the
   running state, not a sleep mode.
 
-## 2. One button, two gestures
+## 2. One button, two gestures that cannot be confused
 
 `features.md` asks for "another button, not mode switcher". LilyGO's board support
 declares exactly one user button:
@@ -33,8 +33,8 @@ declares exactly one user button:
 ```
 
 The other button on the board is the power key, wired to the AXP2101 and reported
-over I2C on GPIO 40. It works fine as a *sleep* trigger — but it cannot **wake** the
-chip, and that decides the design.
+over I2C on GPIO 40. It works as a *sleep* trigger — but it cannot **wake** the chip,
+and that decides the design.
 
 ### Why the power key cannot wake it
 
@@ -43,41 +43,55 @@ ESP32 must sleep rather than be switched off. Waking from deep sleep needs an RT
 GPIO, and on the ESP32-S3 those stop at GPIO21 — `SOC_RTCIO_PIN_COUNT` is 22 and the
 last channel defined is `RTCIO_GPIO21_CHANNEL`. The PMU's interrupt line is GPIO 40.
 
-So the only button that can wake this board is **GPIO0, the mode button**, and both
-gestures live there.
+So the only button that can wake this board is **GPIO0, the mode button**.
 
-## 3. Sleep and wake, both on the mode button
+## 3. Triple click to sleep
 
-The button already fires a radio switch at three seconds. A longer hold for sleep
-would therefore always switch the radio on its way past, so the action is decided
-**on release**, by how long the button was held:
-
-| Held for | On release |
+| Gesture | Action |
 | --- | --- |
-| under 3 s | nothing |
-| 3 s to 6 s | switch radio, exactly as today |
-| over 6 s | sleep |
+| hold 3 s | switch radio — **unchanged** |
+| triple click | sleep |
+| any press while asleep | wake |
 
-The header shows what is armed while the button is down, so the gesture is visible
-before it commits:
+A triple click cannot be confused with a hold, so **the radio switch keeps its exact
+current behaviour**: it fires at the instant the hold reaches three seconds, while
+the button is still down, with the same countdown on screen. Nothing about the
+existing gesture changes.
+
+That matters more than it sounds. The obvious alternative — sleep on a longer hold —
+would have forced both actions to be decided on release, because a six-second hold
+passes three seconds on its way and would switch the radio first. Triple click
+avoids that entirely.
+
+### What counts as a click
+
+`HoldDetector` already owns this pin's debounce, so it grows the click counting
+rather than a second module duplicating it. Two constants:
 
 ```
-|87%+ 4.05V    HOLD 3s|   counting toward the radio switch
-|87%+ 4.05V       MODE|   release now and the radio switches
-|87%+ 4.05V      SLEEP|   release now and it sleeps
+kClickMaxMs         =  500   a press shorter than this is a click, not a hold
+kMultiClickWindowMs = 1200   all three clicks must land inside this window
 ```
 
-### This changes `HoldDetector`, and that is the point
+`update()` returns an event rather than a bool:
 
-`HoldDetector::update()` currently returns `true` once, at the instant the hold
-reaches `kHoldMs`. It becomes a small enum returned on release —
-`HoldAction::None`, `HoldAction::SwitchMode`, `HoldAction::Sleep`.
+```cpp
+enum class ButtonEvent : uint8_t { None, Hold, TripleClick };
+ButtonEvent update(bool pressed, uint32_t nowMs);
+```
 
-`HoldDetector` is a pure module with existing host tests, so unlike the rest of this
-phase this part is genuinely testable: the thresholds, the release semantics, the
-debounce interaction, and the boundaries at exactly 3 s and 6 s all get assertions.
-Its existing tests change shape because the contract changed; that is expected and
-they must be rewritten rather than deleted.
+`Hold` still fires while the button is down at `kHoldMs`. `TripleClick` fires on the
+release of the third click. A press longer than `kClickMaxMs` is not a click and
+resets the count, so a hold never contributes to one.
+
+`HoldDetector` is pure and already host-tested, so unlike the rest of this phase the
+thresholds and counting get real assertions.
+
+### No new screen feedback is needed
+
+The existing `HOLD 3s` countdown covers the hold. A triple click is over in under a
+second — there is nothing useful to show mid-gesture, and the acknowledgement is the
+`SLEEPING` message in §4. The spare status row stays spare.
 
 ## 4. What sleep actually does
 
@@ -155,17 +169,21 @@ simplified back to `shutdown()`, which is both simpler and lower.
 ## 7. Testing
 
 **`HoldDetector` gets real host tests** — it is pure, it already has them, and its
-contract is changing:
+contract is changing from a bool to an event:
 
-- A release under 3 s yields `None`.
-- A release between 3 s and 6 s yields `SwitchMode`.
-- A release after more than 6 s yields `Sleep`.
-- Exactly 3000 ms and exactly 6000 ms fall on the documented side of each boundary.
-- Nothing fires while the button is still down, however long it is held.
-- A bounce inside the debounce window does not restart the timer or change which
-  action is armed.
-- `heldMs()` keeps counting past both thresholds, which is what the header reads to
-  decide between `HOLD`, `MODE` and `SLEEP`.
+- Holding for `kHoldMs` still yields `Hold`, at the same instant as today, while the
+  button is still down.
+- Three clicks inside `kMultiClickWindowMs` yield `TripleClick` on the third release.
+- Two clicks then silence yield nothing, and the count expires with the window.
+- A fourth click does not fire a second `TripleClick` without a fresh sequence.
+- A press longer than `kClickMaxMs` is not a click: it resets the count, so a hold
+  never contributes to a triple click.
+- A hold immediately after two clicks still yields `Hold`.
+- Contact bounce inside the debounce window does not register as extra clicks —
+  this is the case that would make the gesture fire by itself, and it is the one
+  most worth testing.
+- The boundaries at exactly `kClickMaxMs` and exactly `kMultiClickWindowMs` fall on
+  the documented side.
 
 **No host tests for the rest.** Disabling rails, `esp_deep_sleep_start()` and the
 U8g2 blank are I/O with no logic, the same reason `Pmu`, `GpsReceiver` and the
@@ -177,8 +195,8 @@ The gate is:
 - `pio test -e native` passes, with the rewritten `HoldDetector` tests.
 - `Pmu.cpp` stays out of `[env:native]`'s `build_src_filter`.
 
-**On hardware:** a 3-second hold still switches radio exactly as before; a 6-second
-hold sleeps; the panel goes dark; a press wakes it; the board does not enter
+**On hardware:** a 3-second hold still switches radio exactly as before; a triple
+click sleeps; the panel goes dark; a press wakes it; the board does not enter
 download mode on wake; charging continues while asleep; and the boot log reports the
 backup-rail voltage.
 
@@ -187,10 +205,10 @@ claims in this document are estimates.
 
 ## 8. Success criteria
 
-- [ ] A release between 3 s and 6 s switches radio, exactly as before this phase.
-- [ ] A release after 6 s sleeps: radio stopped, panel dark, rails down.
-- [ ] The header shows `HOLD`, then `MODE`, then `SLEEP` as the hold passes each
-      threshold, so the gesture is visible before it commits.
+- [ ] A 3-second hold switches radio exactly as before this phase, with the same
+      countdown and the same firing instant.
+- [ ] A triple click sleeps: radio stopped, panel dark, rails down.
+- [ ] Bouncing contacts never produce a triple click on their own.
 - [ ] A press wakes the board, and it does not enter download mode.
 - [ ] The backup rail is still enabled while asleep.
 - [ ] Charging continues while asleep on USB.
@@ -201,15 +219,18 @@ claims in this document are estimates.
 
 ## 9. Risks
 
-**The one-button design has two gestures three seconds apart.** Six seconds is a
-long time to hold something, and the only thing making it discoverable is the header
-changing from `MODE` to `SLEEP`. If that feedback does not read clearly on hardware,
-the thresholds are the thing to adjust, not the mechanism.
+**Triple click is undiscoverable without being told.** Unlike a hold, there is no
+countdown to hint at it. That is accepted: it is a deliberate, rarely-used gesture,
+and making it hard to trigger by accident is worth more than making it obvious.
 
-**Fire-on-release changes a working feature.** Radio switching currently happens at
-the instant the hold reaches three seconds; it will now happen when the button comes
-back up. That is a real change in feel and it is deliberate — it is the only way two
-gestures can share one button without the shorter one always winning.
+**A bouncy button could in principle self-trigger.** Three contact closures inside
+1.2 seconds is exactly what a failing switch produces. The existing debounce is what
+stands between that and the board sleeping on its own, which is why the bounce case
+is called out explicitly in the tests rather than left to chance.
+
+**`kMultiClickWindowMs` at 1200 ms is a guess.** Too tight and the gesture feels
+unreliable; too loose and three deliberate separate presses merge into one. It is one
+constant and the first hardware session is where it gets confirmed.
 
 **The 150 µA estimate is unmeasured**, and so is everything about the backup rail.
 If the rail turns out not to reach the receiver, the correct response is to simplify
