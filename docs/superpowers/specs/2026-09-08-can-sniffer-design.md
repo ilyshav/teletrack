@@ -2,7 +2,8 @@
 
 **Date:** 2026-09-08
 **Status:** Draft, awaiting review
-**This is a second environment in `teletrack`, not a separate project.** See §1.
+**This describes a SEPARATE project.** It lives here only until that repository
+exists; move it there when it does.
 
 ## 1. Goal
 
@@ -13,27 +14,35 @@ The point is the frames nobody has decoded yet. The community database has
 throttle, speed, RPM, brake and steering; it is missing fuel level, coolant
 temperature, clutch position and selected gear. Finding those is what this is for.
 
-### Why this lives here, as `[env:sniffer]`
+### A separate project, deliberately
 
-It runs on **the ESP32-S3-DevKitC-1 from this project**, TFT and all — which is
-the board `[env:esp]` already supports, and that support was expensive:
+`teletrack` is a shipped thing now. Adding a second product to it means every
+future change has to consider both, and its build already carries five phases of
+configuration. Keeping this apart costs one duplicated block of board settings and
+buys a repository that does one job.
 
-- `-DUSE_FSPI_PORT`, without which `TFT_eSPI::init()` null-derefs on the S3
-- `board_upload.flash_size` and `board_upload.maximum_size`, without which the
-  board boot-loops on a 16 MB partition table
-- `board_build.arduino.memory_type = qio_opi` for the octal PSRAM
-- `build_unflags = -std=gnu++11`, without which our `-std=gnu++17` is silently
-  overridden by the core
+**There is no display, which is what makes that cheap.** Most of `teletrack`'s
+`[env:esp]` configuration is the TFT — `USE_FSPI_PORT`, eight `TFT_*` defines,
+font loading. Without it, what carries over is a dozen lines, and every one of
+them was expensive to learn:
 
-A separate repository would copy all of that and then drift from it. `TftDisplay`
-and `LogRing` come along too, which is where §7's screen comes from.
+```ini
+board_build.flash_size = 16MB
+board_upload.flash_size = 16MB        ; without these two the board boot-loops:
+board_upload.maximum_size = 16777216  ; the manifest says 8MB and build_ does not
+board_build.arduino.memory_type = qio_opi   ; octal PSRAM on the N16R8
+board_build.partitions = default_16MB.csv
+build_unflags = -std=gnu++11          ; the core appends its own -std after ours
+build_flags = -std=gnu++17 -DBOARD_HAS_PSRAM
+              -DARDUINO_USB_MODE=1 -DARDUINO_USB_CDC_ON_BOOT=1
+monitor_filters = esp32_exception_decoder
+build_type = debug                    ; keeps symbols, so a panic names functions
+```
 
-The environment excludes `main.cpp` and everything the sniffer does not need —
-BLE, GPS, the PMU, the config portal — the same `build_src_filter` mechanism that
-already keeps `OledDisplay.cpp` out of one environment and `TftDisplay.cpp` out of
-the other.
+Copy that verbatim. `docs/hardware-notes.md` in `teletrack` explains why each line
+is there, and it is the file to read first when this board misbehaves.
 
-**What does not flow back is data.** Any ID decoded with this belongs in
+**What should flow back is data.** Any ID decoded with this belongs in
 `teletrack`'s CAN spec, beside the bus it describes.
 
 ### Out of scope
@@ -46,25 +55,21 @@ the other.
 
 ## 2. Hardware
 
-The ESP32-S3-DevKitC-1 already used by `[env:esp]`, with its ILI9341 TFT, plus an
-SN65HVD230 module and an SD card breakout. No PMU and no battery: it runs from
-USB, so in the car it needs a 12 V adapter.
+The ESP32-S3-DevKitC-1 — the same board `teletrack` uses, but **with nothing
+attached to it except the transceiver and an SD breakout**. No TFT, no PMU, no
+battery: it runs from USB, so in the car it needs a 12 V adapter.
 
-Pins, chosen from what this board has left. The TFT holds 8, 9, 10, 11, 12 and
-21; the mode button 39; USB 19 and 20; and flash with the **octal** PSRAM claims
-26 through 37 — an N16R8 part, so 33-37 are not free here even though they would
-be on a quad-PSRAM board.
+Pins avoid the flash and **octal** PSRAM, which claim 26 through 37 on an N16R8
+part — 33-37 are not free here even though they would be on a quad-PSRAM board —
+and the native USB pins 19 and 20.
 
 ```
 CAN TX   -> GPIO 17          CAN RX  -> GPIO 18
 SD SCK   -> GPIO 13          SD MISO -> GPIO 14
 SD MOSI  -> GPIO 15          SD CS   -> GPIO 16
+status LED -> the onboard RGB, GPIO 48 or 38 depending on board revision
 CANH -> OBD-II pin 6         CANL -> OBD-II pin 14
 ```
-
-The SD card gets its own SPI bus rather than sharing the TFT's. Sharing would
-mean arbitrating between a display refresh and an 8 kB block write, and the whole
-design exists to keep those writes from being interrupted.
 
 500 kbps, the ND's powertrain rate.
 
@@ -164,30 +169,31 @@ Time Stamp,ID,Extended,Dir,Bus,LEN,D1,D2,D3,D4,D5,D6,D7,D8
 Writing that converter is an afternoon. Writing an analysis UI is not, and the
 result would be worse than what already exists.
 
-## 7. Knowing it is working
+## 7. Knowing it is working, with one LED
 
-The TFT comes free with the board, and `TftDisplay` and `LogRing` already draw a
-header and a scrolling log. The sniffer reuses them rather than inventing a
-screen: the header carries the numbers that matter, the log carries what
-happened.
+There is no screen, and in the car there is usually no laptop either. The
+DevKitC-1's onboard addressable RGB LED carries the whole status:
+
+| Colour | Meaning |
+| --- | --- |
+| red | no frames — the bus is silent or the wiring is wrong |
+| green | capturing, nothing dropped |
+| amber | capturing, but frames are being lost |
+| blue | starting up, or no card |
+
+**Red is the one that earns the LED.** It is the difference between "it is
+recording and I will look tonight" and three hours of driving with nothing
+written down — and it is the signal that says to swap RX and TX before suspecting
+anything subtler.
+
+The LED is on GPIO 48 on DevKitC-1 v1.0 and GPIO 38 on v1.1; check the board
+before assuming.
+
+Serial carries the detail once a second, for when a laptop is attached:
 
 ```
-+-----------------------------------------------------+
-| 1847 fps  0 drop              CAN0003.BIN   12.4 MB |
-|                                                     |
-| can: bus up at 500 kbps, listen-only                |
-| sd: card 29.7 GB, next file CAN0003.BIN             |
-| can: first frame, id 0x202                          |
-+-----------------------------------------------------+
+can: 1847 fps, 0 dropped, CAN0003.BIN, 12.4 MB
 ```
-
-Those four numbers answer everything worth asking in the car: is the bus alive,
-is anything being lost, is it still writing, and how far in.
-
-**A frame rate of zero is the signal that the wiring is wrong** — and it is what
-tells you to swap RX and TX before suspecting anything else.
-
-Serial carries the same lines, for when the car is somewhere the screen is not.
 
 ## 8. Testing
 
@@ -237,11 +243,6 @@ tap elsewhere on the bus.
 **Card speed varies wildly.** A slow or worn card stalls longer than the ring can
 absorb. The dropped counter is what makes that visible instead of mysterious; the
 fix is a better card, not more buffering.
-
-**The dual-core split assumes the display stays off the write path.** `TftDisplay`
-redraws are SPI traffic on their own bus, but they still consume a core. The
-writer core must do nothing but write; if the screen update lands there, an SD
-stall and a redraw will collide and the ring will not save you.
 
 **Capturing everything means capturing everything.** A busy bus at 2000 frames a
 second fills a gigabyte in seven hours. That is fine for a session and wrong for
