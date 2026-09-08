@@ -161,7 +161,15 @@ when idle. That is the chip's behaviour, not a bug to chase — and it is why vo
 is carried alongside the percentage in `BatteryState` even though the header shows
 only the percentage.
 
-**1500 mA of input limit assumes a supply that can provide it.** A weak port sags,
-the AXP2101 backs off, charging slows. The failure mode is slow charging, not
-damage. If it ever misbehaves on an old USB 2.0 port, `XPOWERS_AXP2101_VBUS_CUR_LIM_500MA`
-is the single line to change.
+**1500 mA of input limit assumes a supply that can provide it.** If it cannot --
+an old USB 2.0 hub, say -- the 5 V rail droops under the load. The AXP2101 has an
+input undervoltage loop that reduces what it draws when that happens, so it
+self-corrects; the symptom is charging that is slow or stops and starts, and at
+worst the ESP32's own brownout detector resetting the board while it is plugged
+into that port. Unplugging clears it.
+
+Nothing is damaged and the cell is never at risk: the PMU sits between USB and the
+battery and is the thing backing off. The failure mode is slow charging, not heat.
+
+If it does misbehave on a particular port,
+`XPOWERS_AXP2101_VBUS_CUR_LIM_500MA` is the single line to change.
