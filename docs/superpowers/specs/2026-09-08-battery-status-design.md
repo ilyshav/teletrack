@@ -91,7 +91,7 @@ timestamps, which is where uptime was actually readable.
 
 ```
 +---------------------+
-|87%+ 4.05V   BLE CONN|   <- header, inverse video
+|87%+ 4.05V        BLE|   <- header, inverse video
 |SATS 09       3D FIX |
 |LAT  52.37134        |
 |LON   4.89521        |
@@ -113,20 +113,28 @@ One character between the percentage and the voltage carries the charge state:
 `USB` is not a corner case: a T-Beam on the bench with no cell is how most of this
 gets tested, and `0%- 0.00V` would be a lie.
 
-### The counters come off the screen
+### The right side is the radio, and nothing else
 
-The widest left side, `100%+ 4.20V`, is 11 columns. With a separating space that
-leaves 9 for the mode, and the counters previously appended to it do not fit:
-`BLE CONN d99` is 12 and `AP UP 2 cli` is 11.
+`BLE` or `AP`. Not whether a client is connected, not how many, not how many
+packets were dropped. Which radio is running is a fact about the device; the rest
+is a fact about someone else's phone, and it is read with a browser open, not at a
+glance across a paddock.
 
-So the right side is the mode alone — `BLE CONN`, `BLE ADV`, `AP UP`, `AP FAIL`,
-`HOLD 3s`, the longest being 8. Worst case is 11 + 1 + 8 = **20 of 21**.
+All of it stays in `DeviceStatus` and is served by `/api/status`.
 
-The dropped-packet count and the connected-client count are still in
-`DeviceStatus` and still served by `/api/status`. Neither is something you read
-mid-session: drops matter while debugging throughput, and the client count matters
-while setting the device up on a phone, both of which happen with a browser open.
-Battery and mode are what a glance at the device is for.## 6. Elsewhere
+**The one exception is the mode-button countdown**, which replaces the radio name
+while the button is held:
+
+```
+|87%+ 4.05V    HOLD 3s|
+```
+
+That is not a connection detail — it is the only feedback that a three-second hold
+is registering at all. Without it the button feels broken.
+
+Widths: the longest left side is `100%= 4.20V` at 11 columns, the longest right is
+`HOLD 3s` at 7. Worst case 11 + 7 plus separation is **20 of 21**, and in normal
+running it is 11 + 3.## 6. Elsewhere
 
 `DeviceStatus` carries the same fields, so `GET /api/status` and the web UI get
 them without further work — it is the same struct the display reads.
@@ -158,7 +166,7 @@ agrees with the header.
       explicitly, target still 4.2 V.
 - [ ] `Pmu::battery()` returns a cache refreshed at 1 Hz, not a live I2C read.
 - [ ] Header shows percentage, charge state and voltage in all four cases of §5,
-      with the mode on the right and nothing exceeding 21 columns.
+      with the radio on the right and nothing exceeding 21 columns.
 - [ ] `/api/status` carries the same fields.
 - [ ] The OLED's spare row is still spare.
 - [ ] DevKitC builds and behaves exactly as before; 116 host tests still pass.
