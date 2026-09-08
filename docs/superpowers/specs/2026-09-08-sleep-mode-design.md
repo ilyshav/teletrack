@@ -51,12 +51,37 @@ sleep restarts execution from `setup()`, exactly as a power-on does. Neither
 mechanism preserves the running state, so the only real difference between them is
 current, and shutdown wins outright.
 
-### The wake is warm
+### Expect a cold start on wake, and measure it
 
-`shutdown()` leaves VRTC powered, and Phase 4 enabled the button-battery charger
-that feeds the GNSS RTC. The receiver keeps its almanac across a sleep, so the
-first fix after waking should take seconds rather than the minutes a cold start
-needs. That was not why VBACKUP was enabled, but it is the payoff.
+`shutdown()` documents itself as turning off all power channels, with **only VRTC**
+staying up — and VRTC is the PMU's own RTC, not the backup rail. The receiver loses
+power completely.
+
+A u-blox M10 keeps its almanac, ephemeris, time and last position in battery-backed
+RAM held up by its `V_BCKP` pin. What that pin is connected to on this board decides
+everything:
+
+| Fed by | Result on wake |
+| --- | --- |
+| a supercap or coin cell on the board | hot or warm start, seconds to a fix |
+| a PMU rail that `shutdown()` cuts | cold start, tens of seconds to minutes |
+
+**We do not know which this board is.** Phase 4 enabled the AXP2101's backup-cell
+charger with a comment claiming it keeps the almanac alive; that claim came from the
+general role of that rail, not from evidence about this board. LilyGO's own support
+for the S3 Supreme never enables `XPOWERS_VBACKUP` at all — every reference to it is
+in other board branches — and the comment has been corrected to say so.
+
+So the design assumes a **cold start** and does not depend on anything better.
+
+**The measurement that settles it** is in §7: sleep, wake, and time the first fix.
+Under about ten seconds means the backup domain survived; thirty seconds or more
+means it did not. Either way the answer belongs in `docs/hardware-notes.md`, because
+it is a fact about the board that nothing in software can tell us.
+
+If it turns out to be a cold start and that is too slow between sessions, the option
+is to leave the GPS rail powered while sleeping — but that costs milliamps, not
+microamps, and would defeat the phase. That would be a different design, not a tweak.
 
 ## 4. The sequence
 
@@ -144,7 +169,8 @@ microamps and that number has never been checked on this board.
 - [ ] A long press while USB is connected is refused and logged.
 - [ ] The hardware 10 s off-timer still works if firmware is wedged.
 - [ ] The mode button on GPIO0 behaves exactly as before.
-- [ ] GPS gets a fix quickly after a wake, having kept its almanac.
+- [ ] Time to first fix after a wake is measured and written into
+      `docs/hardware-notes.md`, whichever way it comes out.
 - [ ] DevKitC builds and behaves exactly as before; 118 host tests still pass.
 
 ## 9. Risks

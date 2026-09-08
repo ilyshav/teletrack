@@ -33,8 +33,14 @@ bool Pmu::begin() {
   // panel turned out to be an I2C address problem rather than a power one.
   g_pmu.setALDO4Voltage(3300);
   g_pmu.enableALDO4();
-  // Keeps the GNSS RTC and its almanac alive across power cycles. Without it
-  // every start is a cold start: minutes to first fix instead of seconds.
+  // Charges the AXP2101's backup cell. On T-Beam variants where that rail
+  // feeds the GNSS receiver's V_BCKP it holds the almanac and ephemeris across
+  // a power cycle, turning a cold start into a warm or hot one.
+  //
+  // UNVERIFIED ON THIS BOARD. LilyGO's own support for the S3 Supreme never
+  // enables VBACKUP -- every reference to it is in other board branches -- so
+  // whether it reaches this receiver's backup pin is unknown. Harmless either
+  // way; do not rely on it for fix times until someone measures a wake.
   g_pmu.setButtonBatteryChargeVoltage(3300);
   g_pmu.enableButtonBatteryCharge();
 
