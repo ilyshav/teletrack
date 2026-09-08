@@ -31,6 +31,11 @@ class Pmu {
   // Call from loop(). Re-reads the battery at most once per kRefreshIntervalMs.
   void tick(uint32_t nowMs);
 
+  // Switches off every rail that is not needed while asleep. ALDO4 is left ON
+  // deliberately: the GPS holds its own almanac in software backup and needs
+  // its supply to do it. DCDC1 is the ESP32's own and is never touched.
+  void prepareForSleep();
+
   // The most recent reading. Cheap: no I2C, just the cache.
   BatteryState battery() const { return battery_; }
 

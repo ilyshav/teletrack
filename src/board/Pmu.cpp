@@ -33,6 +33,11 @@ bool Pmu::begin() {
   // panel turned out to be an I2C address problem rather than a power one.
   g_pmu.setALDO4Voltage(3300);
   g_pmu.enableALDO4();
+  // LoRa lives on ALDO3 and this project does not use it. The AXP2101 brings
+  // every rail up by itself -- the boot log showed ALDO1 through BLDO2 all
+  // enabled before this function ever ran -- so the radio has been powered
+  // since the board was first flashed. Off, on every boot, not just in sleep.
+  g_pmu.disableALDO3();
   // Charges the AXP2101's backup cell. On T-Beam variants where that rail
   // feeds the GNSS receiver's V_BCKP it holds the almanac and ephemeris across
   // a power cycle, turning a cold start into a warm or hot one.
@@ -114,6 +119,22 @@ void Pmu::tick(uint32_t nowMs) {
   battery_ = state;
 }
 
+void Pmu::prepareForSleep() {
+  if (!present_) {
+    return;
+  }
+  // ALDO3 is already off from begin(). ALDO4 stays on: cutting it is what
+  // would cost a warm GPS start, which is the whole point of the phase.
+  g_pmu.disableALDO1();  // sensors
+  g_pmu.disableALDO2();  // SD card
+  g_pmu.disableBLDO1();
+  g_pmu.disableBLDO2();
+  g_pmu.disableDC3();  // M.2 interface
+  g_pmu.disableDC4();
+  g_pmu.disableDC5();
+  Log::info("sleep", "rails down, GPS rail held");
+}
+
 #else
 
 bool Pmu::begin() {
@@ -124,5 +145,7 @@ bool Pmu::begin() {
 void Pmu::tick(uint32_t nowMs) {
   (void)nowMs;  // no PMU on this board; battery_ stays default-constructed
 }
+
+void Pmu::prepareForSleep() {}  // no PMU on this board
 
 #endif
