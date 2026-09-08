@@ -9,6 +9,16 @@
 #include "board/BoardConfig.h"
 
 bool CanBus::begin() {
+  // Idempotent. A second install fails because the first driver is still
+  // there, and reporting that failure would set present_ false while a
+  // correctly listening driver kept running underneath -- read() would then
+  // return nothing for the rest of the session, silently. GpsReceiver::begin()
+  // is already re-called on a sample-rate change, so re-entry here is a matter
+  // of time rather than a hypothetical.
+  if (present_) {
+    return true;
+  }
+
   // LISTEN_ONLY is the whole safety story. In any other mode the controller
   // acknowledges every frame it receives and emits error frames when it
   // disagrees with the bus -- it becomes an active participant on a live
