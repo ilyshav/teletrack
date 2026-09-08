@@ -33,8 +33,34 @@ bool Pmu::begin() {
   // panel turned out to be an I2C address problem rather than a power one.
   g_pmu.setALDO4Voltage(3300);
   g_pmu.enableALDO4();
-  // Keeps the GNSS RTC and its almanac alive across power cycles. Without it
-  // every start is a cold start: minutes to first fix instead of seconds.
+  // LoRa lives on ALDO3 and this project does not use it. The AXP2101 brings
+  // every rail up by itself -- the boot log showed ALDO1 through BLDO2 all
+  // enabled before this function ever ran -- so the radio has been powered
+  // since the board was first flashed. Off, on every boot, not just in sleep.
+  g_pmu.disableALDO3();
+
+  // Everything else the board powers up with, restored explicitly. This is not
+  // redundant: prepareForSleep() switches these off, deep sleep does not
+  // power-cycle the PMU, and a wake re-enters begin() with them still down. The
+  // display's supply is among them -- a wake with them left off hung the board
+  // in u8g2's init with a dark screen and no serial output, which is the same
+  // failure the I2C address bug produced in phase 3 and just as hard to read.
+  g_pmu.setALDO1Voltage(3300);
+  g_pmu.enableALDO1();
+  g_pmu.setALDO2Voltage(3300);
+  g_pmu.enableALDO2();
+  g_pmu.setBLDO1Voltage(3300);
+  g_pmu.enableBLDO1();
+  g_pmu.setBLDO2Voltage(3300);
+  g_pmu.enableBLDO2();
+  // Charges the AXP2101's backup cell. On T-Beam variants where that rail
+  // feeds the GNSS receiver's V_BCKP it holds the almanac and ephemeris across
+  // a power cycle, turning a cold start into a warm or hot one.
+  //
+  // UNVERIFIED ON THIS BOARD. LilyGO's own support for the S3 Supreme never
+  // enables VBACKUP -- every reference to it is in other board branches -- so
+  // whether it reaches this receiver's backup pin is unknown. Harmless either
+  // way; do not rely on it for fix times until someone measures a wake.
   g_pmu.setButtonBatteryChargeVoltage(3300);
   g_pmu.enableButtonBatteryCharge();
 
@@ -108,6 +134,23 @@ void Pmu::tick(uint32_t nowMs) {
   battery_ = state;
 }
 
+void Pmu::prepareForSleep() {
+  if (!present_) {
+    return;
+  }
+  // ALDO3 is already off from begin(). ALDO4 stays on: cutting it is what
+  // would cost a warm GPS start, which is the whole point of the phase.
+  g_pmu.disableALDO1();  // sensors
+  g_pmu.disableALDO2();  // SD card
+  g_pmu.disableBLDO1();
+  g_pmu.disableBLDO2();
+  // DC3, DC4 and DC5 are left alone. The vendor calls them the M.2 interface
+  // and nothing here knows what else hangs off them; switching them off saved
+  // an unmeasured amount and is not worth guessing about on a board that has
+  // already failed to come back once.
+  Log::info("sleep", "rails down, GPS rail held");
+}
+
 #else
 
 bool Pmu::begin() {
@@ -118,5 +161,7 @@ bool Pmu::begin() {
 void Pmu::tick(uint32_t nowMs) {
   (void)nowMs;  // no PMU on this board; battery_ stays default-constructed
 }
+
+void Pmu::prepareForSleep() {}  // no PMU on this board
 
 #endif

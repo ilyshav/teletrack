@@ -24,6 +24,7 @@ class OledDisplay : public Display {
 
   bool begin() override;
   void tick(uint32_t nowMs, const DeviceStatus& status) override;
+  void sleep() override;
 
  private:
   void draw(const DeviceStatus& status);

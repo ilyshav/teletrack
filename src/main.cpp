@@ -3,6 +3,8 @@
 #include <math.h>
 
 #include <Arduino.h>
+#include <driver/rtc_io.h>
+#include <esp_sleep.h>
 
 #include "ble/BleLink.h"
 #include "ble/RaceChronoGps.h"
@@ -115,6 +117,64 @@ void stopCurrentMode(RadioMode leaving) {
     app.ble.end();
   }
 }
+
+#if defined(BOARD_TBEAM)
+
+void enterSleep() {
+  // Before anything is torn down. A triple click can be recognised while the
+  // button is still DOWN: the third click's release may go unsampled, and the
+  // press that reveals it is the one still in progress. Arming a wake on LOW
+  // while GPIO0 is already LOW satisfies the wake condition the instant deep
+  // sleep begins, so the board wakes straight back up -- SLEEPING flashes and
+  // it reboots, looking exactly like a crash.
+  //
+  // This has to happen first. Abandoning the sleep after the radio is down and
+  // the GPS is in backup would leave the board half torn down with no way back
+  // except a reboot.
+  const uint32_t deadline = millis() + 5000;
+  while (digitalRead(BoardConfig::kModeButtonPin) == LOW && millis() < deadline) {
+    delay(10);
+  }
+  if (digitalRead(BoardConfig::kModeButtonPin) == LOW) {
+    Log::warn("sleep", "button still held, not sleeping");
+    return;
+  }
+  delay(50);  // let the contact settle before arming on its level
+
+  Log::info("sleep", "going down");
+  // The radio comes down the way a mode switch brings it down, so a connected
+  // client sees a clean disconnect rather than a link that simply stops.
+  stopCurrentMode(app.modes.mode());
+  // Before its neighbours lose power: the receiver has to be told to hold its
+  // own almanac while it still has a supply to be told over.
+  app.gpsRx.sleep();
+  app.display.sleep();
+  app.pmu.prepareForSleep();
+
+  // GPIO0 going low. It is a strapping pin, but a deep-sleep wake is not a
+  // power-on reset: the ROM takes its fast path through the wake stub and
+  // never re-reads the boot-mode straps, so waking on it cannot drop the
+  // board into download mode.
+  // The pad's pull is not configured by enabling the wake source, and in deep
+  // sleep the digital-domain pull is gone. Without this the wake pin can float
+  // and either wake the board at random or never wake it at all.
+  const gpio_num_t wakePin = static_cast<gpio_num_t>(BoardConfig::kModeButtonPin);
+  rtc_gpio_pullup_en(wakePin);
+  rtc_gpio_pulldown_dis(wakePin);
+  esp_sleep_enable_ext0_wakeup(wakePin, 0);
+  esp_deep_sleep_start();  // does not return; a wake restarts setup()
+}
+
+#else
+
+void enterSleep() {
+  // This board's mode button is GPIO39, and the ESP32-S3's RTC GPIOs stop at
+  // 21, so nothing could wake it again. A board asleep with no wake source
+  // needs a power cycle to recover, which is worse than not sleeping.
+  Log::warn("sleep", "not supported on this board");
+}
+
+#endif
 
 #if !defined(BOARD_TBEAM)
 // Builds a synthetic fix walking a slow circle, at the wall-clock time
@@ -264,6 +324,12 @@ void updateRate(uint32_t nowMs) {
 void setup() {
   Log::begin(115200);
   Log::info("boot", "teletrack on %s", BoardConfig::kBoardName);
+  // Says outright whether this boot is a wake. Without it a board that wakes
+  // and then hangs looks exactly like one that never woke at all, and the two
+  // need completely different investigations.
+  if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0) {
+    Log::info("boot", "woke from sleep on the mode button");
+  }
 
   // Before the display: on the T-Beam the panel sits on a rail this switches.
   if (!app.pmu.begin()) {
@@ -314,14 +380,22 @@ void loop() {
     startCurrentMode();
   }
 
-  if (app.button.tick(now)) {
-    const RadioMode leaving = app.modes.mode();
-    if (app.modes.handle(ModeEvent::ButtonHeld)) {
-      Log::info("mode", "switching");
-      // Down before up: both radios share one front end.
-      stopCurrentMode(leaving);
-      startCurrentMode();
+  switch (app.button.tick(now)) {
+    case ButtonEvent::Hold: {
+      const RadioMode leaving = app.modes.mode();
+      if (app.modes.handle(ModeEvent::ButtonHeld)) {
+        Log::info("mode", "switching");
+        // Down before up: both radios share one front end.
+        stopCurrentMode(leaving);
+        startCurrentMode();
+      }
+      break;
     }
+    case ButtonEvent::TripleClick:
+      enterSleep();
+      break;
+    case ButtonEvent::None:
+      break;
   }
 
   // Drained in both modes: the status screen shows satellites while the
