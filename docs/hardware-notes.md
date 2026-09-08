@@ -209,6 +209,36 @@ Two consequences, both of which otherwise present as a dead GPS:
   so the receiver returns at its default baud emitting NMEA. The probe and
   reconfiguration that already run on every boot cover this.
 
+### Never deep-sleep while the wake pin is asserted
+
+`esp_sleep_enable_ext0_wakeup(pin, 0)` wakes on the pin going LOW. If it is
+already LOW when `esp_deep_sleep_start()` runs, the condition is satisfied
+immediately and the board wakes at once — the screen flashes `SLEEPING` and it
+reboots, which looks exactly like a crash.
+
+This is reachable here, not theoretical: a triple click can be recognised while
+the button is still down. The third click's release may go unsampled, and the
+press that reveals it is the one still in progress. `enterSleep()` therefore
+waits for the button to come up **before touching anything** — abandoning the
+sleep after the radio is down and the GPS is in backup would leave the board
+half torn down.
+
+The wake pad's pull is also configured explicitly with `rtc_gpio_pullup_en()`.
+Enabling the wake source does not do it, and the digital-domain pull is gone in
+deep sleep, so the pin could otherwise float.
+
+### Rails switched off for sleep do not come back
+
+`Pmu::prepareForSleep()` disables ALDO1, ALDO2, BLDO1, BLDO2 and DC3-5. Deep
+sleep does not power-cycle the AXP2101, and `Pmu::begin()` does not re-enable
+them, so **after the first sleep they stay off across every subsequent boot**
+until the battery or USB is physically pulled.
+
+That is harmless today because nothing uses them. It is a trap for whoever adds
+SD-card logging or reads the sensors: the peripheral will be dead on any board
+that has slept once, and nothing in the log will say why. Re-enable what you
+need in `Pmu::begin()` rather than assuming the rail is up.
+
 ### LoRa is off from boot
 
 The AXP2101 enables every rail by itself — a boot log reads `ALDO1=1 ALDO2=1

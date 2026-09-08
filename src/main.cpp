@@ -3,6 +3,7 @@
 #include <math.h>
 
 #include <Arduino.h>
+#include <driver/rtc_io.h>
 #include <esp_sleep.h>
 
 #include "ble/BleLink.h"
@@ -120,6 +121,26 @@ void stopCurrentMode(RadioMode leaving) {
 #if defined(BOARD_TBEAM)
 
 void enterSleep() {
+  // Before anything is torn down. A triple click can be recognised while the
+  // button is still DOWN: the third click's release may go unsampled, and the
+  // press that reveals it is the one still in progress. Arming a wake on LOW
+  // while GPIO0 is already LOW satisfies the wake condition the instant deep
+  // sleep begins, so the board wakes straight back up -- SLEEPING flashes and
+  // it reboots, looking exactly like a crash.
+  //
+  // This has to happen first. Abandoning the sleep after the radio is down and
+  // the GPS is in backup would leave the board half torn down with no way back
+  // except a reboot.
+  const uint32_t deadline = millis() + 5000;
+  while (digitalRead(BoardConfig::kModeButtonPin) == LOW && millis() < deadline) {
+    delay(10);
+  }
+  if (digitalRead(BoardConfig::kModeButtonPin) == LOW) {
+    Log::warn("sleep", "button still held, not sleeping");
+    return;
+  }
+  delay(50);  // let the contact settle before arming on its level
+
   Log::info("sleep", "going down");
   // The radio comes down the way a mode switch brings it down, so a connected
   // client sees a clean disconnect rather than a link that simply stops.
@@ -134,7 +155,13 @@ void enterSleep() {
   // power-on reset: the ROM takes its fast path through the wake stub and
   // never re-reads the boot-mode straps, so waking on it cannot drop the
   // board into download mode.
-  esp_sleep_enable_ext0_wakeup(static_cast<gpio_num_t>(BoardConfig::kModeButtonPin), 0);
+  // The pad's pull is not configured by enabling the wake source, and in deep
+  // sleep the digital-domain pull is gone. Without this the wake pin can float
+  // and either wake the board at random or never wake it at all.
+  const gpio_num_t wakePin = static_cast<gpio_num_t>(BoardConfig::kModeButtonPin);
+  rtc_gpio_pullup_en(wakePin);
+  rtc_gpio_pulldown_dis(wakePin);
+  esp_sleep_enable_ext0_wakeup(wakePin, 0);
   esp_deep_sleep_start();  // does not return; a wake restarts setup()
 }
 
