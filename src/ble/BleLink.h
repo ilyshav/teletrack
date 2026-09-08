@@ -22,9 +22,9 @@ class BleLink {
   // no room left in the 31-byte advertisement for the device name, so it gets
   // pushed into the scan response where a passive scanner never sees it.
   static constexpr uint16_t kServiceUuid16 = 0x1FF8;
-  // The CAN half of the profile. This device has no CAN bus, but RaceChrono
-  // configures a DIY device by writing a filter command to 0x0002 on connect,
-  // and a device missing it is one it cannot set up.
+  // The CAN half of the profile. RaceChrono configures a DIY device by
+  // writing a filter command to 0x0002 on connect regardless of whether it
+  // ends up using CAN, so a device missing these is one it cannot set up.
   static constexpr uint16_t kCanMainUuid16 = 0x0001;
   static constexpr uint16_t kCanFilterUuid16 = 0x0002;
   static constexpr uint16_t kGpsMainUuid16 = 0x0003;
@@ -44,6 +44,13 @@ class BleLink {
   // buffering: a missed notify just means the app reads the current value
   // instead (the characteristic is READ + NOTIFY).
   void publishTime(const uint8_t bytes[3]);
+
+  // Sends one CAN frame on characteristic 0x0001. len is 4 + dlc.
+  void publishCan(const uint8_t* packet, size_t len);
+
+  // Pops one filter command written by the app. Call from loop() only: the
+  // queue is filled on the BLE host task.
+  bool takeFilterCommand(uint8_t* out, size_t& len);
 
   bool connected() const { return connected_; }
   uint16_t mtu() const { return mtu_; }

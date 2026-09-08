@@ -1,5 +1,7 @@
 #include "ble/BleLink.h"
 
+#include <string.h>
+
 #include <NimBLEDevice.h>
 
 #include "core/Log.h"
@@ -12,6 +14,7 @@ namespace {
 constexpr size_t kMaxPacketsPerTick = 8;
 
 NimBLEServer* g_server = nullptr;
+NimBLECharacteristic* g_canMain = nullptr;
 NimBLECharacteristic* g_gpsMain = nullptr;
 NimBLECharacteristic* g_gpsTime = nullptr;
 bool g_connected = false;
@@ -21,15 +24,20 @@ uint16_t g_mtu = 23;
 uint16_t g_connHandle = 0;
 bool g_hasConn = false;
 
-// Set by the callbacks, drained by tick(). The callbacks run on the NimBLE
-// host task, and logging there puts a USB CDC write -- which can drop or
-// stall -- in the middle of connection handling. Flag it and let loop() do
-// the talking.
-// What RaceChrono last wrote to the CAN filter characteristic, drained by
-// tick(). Recording it answers a question we could not otherwise ask: whether
-// the app talks to that characteristic at all.
-uint8_t g_filterCmd = 0;
-bool g_filterWritten = false;
+// Filter writes arrive on the NimBLE host task and are applied on loop(),
+// which owns the filter table. Touching it from both would be a data race on
+// a structure that decides what reaches the app.
+//
+// A queue rather than one slot: RaceChrono sends deny-all followed by one
+// add-pid per channel, and a dropped command is a channel that silently
+// never appears. Seven bytes is the longest command the protocol defines.
+constexpr size_t kFilterQueueDepth = 8;
+constexpr size_t kFilterCmdBytes = 7;
+uint8_t g_filterQueue[kFilterQueueDepth][kFilterCmdBytes];
+uint8_t g_filterLens[kFilterQueueDepth];
+volatile uint8_t g_filterHead = 0;
+volatile uint8_t g_filterTail = 0;
+uint32_t g_filterOverflows = 0;
 
 bool g_logConnected = false;
 bool g_logDisconnected = false;
@@ -68,16 +76,20 @@ class ServerCallbacks : public NimBLEServerCallbacks {
 
 ServerCallbacks g_callbacks;
 
-// Accepts and ignores the filter commands: deny-all (0), allow-all (1) and
-// allow-one-PID (2) all mean the same thing to a device with no CAN bus. What
-// matters is that the write succeeds, so the app can finish configuring.
 class FilterCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* characteristic) override {
     const std::string value = characteristic->getValue();
-    if (!value.empty()) {
-      g_filterCmd = static_cast<uint8_t>(value[0]);
-      g_filterWritten = true;
+    if (value.empty() || value.size() > kFilterCmdBytes) {
+      return;
     }
+    const uint8_t next = static_cast<uint8_t>((g_filterHead + 1) % kFilterQueueDepth);
+    if (next == g_filterTail) {
+      ++g_filterOverflows;
+      return;
+    }
+    memcpy(g_filterQueue[g_filterHead], value.data(), value.size());
+    g_filterLens[g_filterHead] = static_cast<uint8_t>(value.size());
+    g_filterHead = next;
   }
 };
 
@@ -124,10 +136,9 @@ bool BleLink::begin(const char* deviceName, TelemetryRing& ring) {
   NimBLEService* service = g_server->createService(NimBLEUUID(kServiceUuid16));
 
   // The CAN characteristics come first, in the order the reference declares
-  // them. Nothing is ever notified on 0x0001 -- there is no CAN bus here --
-  // but both must exist for RaceChrono to finish setting the device up.
-  service->createCharacteristic(NimBLEUUID(kCanMainUuid16),
-                                NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+  // them.
+  g_canMain = service->createCharacteristic(
+      NimBLEUUID(kCanMainUuid16), NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
   NimBLECharacteristic* filter = service->createCharacteristic(
       NimBLEUUID(kCanFilterUuid16), NIMBLE_PROPERTY::WRITE);
   // Not owned: NimBLECharacteristic's destructor does not delete its
@@ -197,11 +208,6 @@ void BleLink::tick(uint32_t nowMs) {
     g_logDisconnected = false;
     Log::info("ble", "disconnected, advertising again");
   }
-  if (g_filterWritten) {
-    g_filterWritten = false;
-    Log::info("ble", "racechrono wrote filter command %u",
-              static_cast<unsigned>(g_filterCmd));
-  }
   if (g_logMtu != 0) {
     Log::info("ble", "mtu %u", (unsigned)g_logMtu);
     g_logMtu = 0;
@@ -232,4 +238,23 @@ void BleLink::publishTime(const uint8_t bytes[3]) {
     g_gpsTime->notify();
     sentBytes_ += 3;
   }
+}
+
+void BleLink::publishCan(const uint8_t* packet, size_t len) {
+  if (g_canMain == nullptr || !connected_) {
+    return;
+  }
+  g_canMain->setValue(packet, len);
+  g_canMain->notify();
+  sentBytes_ += len;
+}
+
+bool BleLink::takeFilterCommand(uint8_t* out, size_t& len) {
+  if (g_filterTail == g_filterHead) {
+    return false;
+  }
+  len = g_filterLens[g_filterTail];
+  memcpy(out, g_filterQueue[g_filterTail], len);
+  g_filterTail = static_cast<uint8_t>((g_filterTail + 1) % kFilterQueueDepth);
+  return true;
 }
