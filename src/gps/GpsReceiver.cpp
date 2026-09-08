@@ -123,6 +123,17 @@ size_t addU4(uint8_t* p, size_t n, uint32_t key, uint32_t value) {
 // carry a single valid frame.
 bool probe(uint32_t baud) {
   Serial1.begin(baud, SERIAL_8N1, BoardConfig::kGpsRxPin, BoardConfig::kGpsTxPin);
+
+  // A receiver left in software backup is silent and wakes on UART activity,
+  // so listening alone would report it absent at every baud -- on this boot
+  // and every boot after, since it would stay in backup. Rattle the line
+  // first. The bytes are meaningless; only the edges matter.
+  const uint8_t filler[16] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+                              0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+  Serial1.write(filler, sizeof(filler));
+  Serial1.flush();
+  delay(20);  // the M10 needs a moment to come out of backup
+
   const uint32_t deadline = millis() + kProbeMs;
   uint8_t prev = 0;
   while (millis() < deadline) {
@@ -242,6 +253,25 @@ bool GpsReceiver::tick() {
   return decoded;
 }
 
+void GpsReceiver::sleep() {
+  if (!present_) {
+    return;
+  }
+  // UBX-RXM-PMREQ, taken from the reference implementation's
+  // powerOffWithInterrupt() rather than reconstructed from the protocol
+  // tables. Little-endian throughout, like all of UBX.
+  const uint8_t payload[16] = {
+      0x00, 0x00, 0x00, 0x00,  // version 0, then three reserved bytes
+      0x00, 0x00, 0x00, 0x00,  // duration 0: indefinite, until woken
+      0x06, 0x00, 0x00, 0x00,  // flags: backup | force
+      0x08, 0x00, 0x00, 0x00,  // wakeupSources: UART RX
+  };
+  sendUbx(0x02, 0x41, payload, sizeof(payload));
+  // No ACK is waited for. The receiver may go down before it sends one, and
+  // waiting would only delay the sleep.
+  Log::info("gps", "receiver in software backup");
+}
+
 #else
 
 bool GpsReceiver::begin(uint8_t rateHz) {
@@ -251,5 +281,7 @@ bool GpsReceiver::begin(uint8_t rateHz) {
 }
 
 bool GpsReceiver::tick() { return false; }
+
+void GpsReceiver::sleep() {}  // no receiver on this board
 
 #endif
