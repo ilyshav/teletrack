@@ -88,78 +88,109 @@ The existing `HOLD 3s` countdown covers the hold. A triple click is over in unde
 second — there is nothing useful to show mid-gesture, and the acknowledgement is the
 `SLEEPING` message in §4. The spare status row stays spare.
 
-## 4. What sleep actually does
+## 4. LoRa is switched off permanently, not just while asleep
+
+The boot log from this board shows every rail already enabled at power-up:
 
 ```
-src/board/Pmu.h/.cpp    Pmu::prepareForSleep()
-src/main.cpp            drives the sequence
+pmu: before: ALDO1=1 ALDO2=1 ALDO3=1 ALDO4=1 BLDO1=1 BLDO2=1
+```
+
+The firmware never enables ALDO3, but the AXP2101 powers it anyway, so **the LoRa
+radio has been running since the board was first flashed.** This project does not
+use LoRa and never will.
+
+`Pmu::begin()` therefore disables ALDO3 unconditionally, at boot, on every start.
+That is a continuous saving while running, not only during sleep, and it is the
+single largest one available for a peripheral that does nothing.
+
+The SD card (ALDO2), the sensors (ALDO1) and the M.2 interface (DCDC3/4/5) are
+equally unused, but each has an interaction worth checking before switching it off
+— the magnetometer on ALDO1 is what `OledDisplay::begin()` probes at 0x3C to decide
+the panel's address, for instance. They are left alone here and are a separate,
+easily reversible change.
+
+## 5. What sleep actually does
+
+```
+src/gps/GpsReceiver.h/.cpp   GpsReceiver::sleep(), GpsReceiver::wake()
+src/board/Pmu.h/.cpp         Pmu::prepareForSleep()
+src/main.cpp                 drives the sequence
 ```
 
 1. Log `sleep: going down`.
 2. Stop the active radio through the existing `stopCurrentMode()`, so BLE or the AP
    comes down cleanly rather than being cut mid-connection.
-3. Draw `SLEEPING` and hold it briefly, then blank the panel with U8g2's
+3. **Put the GPS into software backup** — see §6.
+4. Draw `SLEEPING`, hold it briefly, then blank the panel with U8g2's
    `setPowerSave(1)`.
-4. `Pmu::prepareForSleep()` disables ALDO1, ALDO2, ALDO3, ALDO4, BLDO1, BLDO2,
-   DCDC3, DCDC4 and DCDC5 — the sensors, SD card, LoRa, GPS main and the M.2
-   interface — and **leaves the backup rail enabled**.
-5. `esp_sleep_enable_ext0_wakeup((gpio_num_t)0, 0)` — wake on GPIO0 going low.
-6. `esp_deep_sleep_start()`.
+5. `Pmu::prepareForSleep()` disables ALDO1, ALDO2, BLDO1, BLDO2, DCDC3, DCDC4 and
+   DCDC5 — sensors, SD card and the M.2 interface. **ALDO3 is already off from
+   boot, and ALDO4 stays on**, because the receiver needs its supply to hold its
+   own memory.
+6. `esp_sleep_enable_ext0_wakeup((gpio_num_t)0, 0)` — wake on GPIO0 going low.
+7. `esp_deep_sleep_start()`.
 
-### What stays powered, and why
+| Consumer | Asleep |
+| --- | --- |
+| ESP32-S3, deep sleep | ~10 µA |
+| MAX-M10S, software backup | ~15 µA |
+| AXP2101 quiescent | ~30-50 µA |
+| **Total** | **~55-75 µA** |
 
-**The backup rail.** This is the whole reason for sleeping rather than shutting
-down. The receiver keeps its almanac, ephemeris and time, so the first fix after a
-wake takes seconds instead of tens of seconds. On this board that routing is
-**unverified** — see §6.
+That is years on a 3000 mAh cell, and the figures are datasheet quiescent currents,
+not measurements.
 
-**DCDC1**, the ESP32's own supply, which the vendor marks protected. The chip is in
-deep sleep at roughly 10 µA rather than unpowered.
+## 6. Guaranteeing a warm or hot start
 
-**The charger.** The PMU stays up, so a board left on USB keeps charging while it
-sleeps. That is the right behaviour and needs no code — it is simply what does not
-get disabled.
+**The receiver is put to sleep, not powered down.** `UBX-RXM-PMREQ` — class `0x02`,
+id `0x41`, 16-byte payload — places the M10 in software backup, where it keeps its
+ephemeris, almanac, time and last position in its own memory while drawing about
+15 µA from a supply that stays on.
 
-Estimated total draw is around 150 µA, which is over two years on a 3000 mAh cell.
-The figure is an estimate from datasheet quiescent currents and has not been
-measured on this board.
+```
+[0]       0x00         message version
+[1..3]    0x00         reserved
+[4..7]    0x00000000   duration, 0 means indefinite
+[8]       0x06         flags: backup | force
+[9..11]   0x00         reserved
+[12..15]  0x00000008   wakeupSources: UART RX
+```
 
-## 5. Waking
+Byte order is little-endian, as everywhere in UBX. The payload is taken from the
+reference implementation's `powerOffWithInterrupt()`, not reconstructed from the
+protocol tables.
 
-`esp_deep_sleep_start()` does not return. A wake restarts execution from `setup()`,
-exactly like a power-on, so there is no state to save or restore and no resume path
-to design. The radio comes up in `kBootMode` as it always does.
+**This is why ALDO4 stays powered, and it is what makes the guarantee hold.** The
+earlier design cut the GPS rail and hoped the board routed `V_BCKP` to a backup
+supply — an assumption about layout that nothing in software could confirm. Software
+backup removes the assumption: the receiver holds its own state, whatever `V_BCKP` is
+wired to.
 
-**GPIO0 is a strapping pin, and waking on it is safe.** Held low at a *power-on*
-reset the chip enters download mode, which is how the board is flashed. A deep-sleep
-wake is not a power-on reset: the ROM takes its fast path through the wake stub and
-never re-evaluates the boot-mode strapping. Holding the button to wake cannot drop
-the board into download mode.
+### Waking it again
 
-A short press does nothing while awake — only a three-second hold does anything — so
-"short press wakes it" collides with no existing gesture.
+Two details that will otherwise present as a dead GPS.
 
-## 6. The GPS backup rail is unverified on this board
+**The receiver must be spoken to before it will answer.** It wakes on UART RX
+activity, so `GpsReceiver::begin()` sends a short burst of filler bytes at each
+candidate baud *before* listening. The existing probe only listens, and a receiver in
+backup is silent — it would be reported as absent at every baud.
 
-`Pmu::begin()` enables the AXP2101's backup-cell charger, and a comment there used
-to claim it keeps the GNSS almanac alive. That claim came from the general role of
-that rail, not from evidence about this board, and it has been corrected.
+**Its configuration is gone.** Software backup preserves navigation data but not the
+RAM-layer settings, so the receiver comes back at its default baud emitting NMEA.
+That is already handled: a deep-sleep wake restarts from `setup()`, and
+`GpsReceiver::begin()` re-probes the baud and re-sends the whole configuration on
+every boot. Nothing extra is needed, but the reason it works is worth knowing.
 
-LilyGO's own support for the S3 Supreme never enables `XPOWERS_VBACKUP` — every
-reference to it is in other board branches, one of them noting the rail costs about
-100 µA. Whether it reaches this receiver's `V_BCKP` pin is a layout question that no
-amount of reading the software will answer.
+**Do not wait for an ACK.** The reference notes the receiver may not acknowledge
+`RXM-PMREQ` before it goes down; `sleep()` sends and returns.
 
-Two things settle it, both cheap:
+### The backup rail is no longer load-bearing
 
-- **`getButtonBatteryVoltage()` in the boot log.** If that rail reads nothing, there
-  is nothing on it and the premise is wrong.
-- **Time the first fix after a wake.** Under about ten seconds means the backup
-  domain survived; thirty or more means it did not.
-
-If it turns out the rail does not reach the receiver, sleep still works and still
-saves the battery — it just wakes to a cold start, and the design should then be
-simplified back to `shutdown()`, which is both simpler and lower.
+`Pmu::begin()` still enables the AXP2101's backup-cell charger, and it is still
+unverified whether that rail reaches this receiver. It no longer matters: if it does,
+it is harmless redundancy; if it does not, software backup covers the case anyway.
+Nothing in this design depends on it.
 
 ## 7. Testing
 
@@ -192,8 +223,9 @@ The gate is:
 
 **On hardware:** a 3-second hold still switches radio exactly as before; a triple
 click sleeps; the panel goes dark; a press wakes it; the board does not enter
-download mode on wake; charging continues while asleep; and the boot log reports the
-backup-rail voltage.
+download mode on wake; charging continues while asleep; the rail log shows ALDO3 off
+from the first boot; and — the point of the phase — **the GPS reaches a fix within
+seconds of waking rather than tens of seconds.**
 
 **Worth measuring once:** sleep current, and time to first fix after a wake. Both
 claims in this document are estimates.
@@ -205,9 +237,13 @@ claims in this document are estimates.
 - [ ] A triple click sleeps: radio stopped, panel dark, rails down.
 - [ ] Bouncing contacts never produce a triple click on their own.
 - [ ] A press wakes the board, and it does not enter download mode.
-- [ ] The backup rail is still enabled while asleep.
+- [ ] **LoRa (ALDO3) is off from boot, verified in the rail log, on every start.**
+- [ ] **The GPS gets a warm or hot start after a wake** — a fix in seconds, not the
+      tens of seconds a cold start needs. This is the requirement the phase exists
+      to meet; if it fails, the design has failed.
+- [ ] The receiver answers after a wake at all, which requires the filler bytes.
+- [ ] ALDO4 stays powered while asleep; every other unused rail is down.
 - [ ] Charging continues while asleep on USB.
-- [ ] The boot log reports the backup-rail voltage.
 - [ ] Sleep current and time-to-first-fix after a wake are measured once and written
       into `docs/hardware-notes.md`.
 - [ ] DevKitC builds and behaves exactly as before; host tests pass.
@@ -227,9 +263,16 @@ is called out explicitly in the tests rather than left to chance.
 unreliable; too loose and three deliberate separate presses merge into one. It is one
 constant and the first hardware session is where it gets confirmed.
 
-**The 150 µA estimate is unmeasured**, and so is everything about the backup rail.
-If the rail turns out not to reach the receiver, the correct response is to simplify
-back to `shutdown()` rather than keep a more complex sleep that buys nothing.
+**The current figures are datasheet quiescent values, not measurements.** ~55-75 µA
+is an estimate built from three of them.
+
+**Software backup is the whole guarantee, and it has one failure mode worth naming:
+a receiver that will not wake.** If the filler bytes are too few, sent at the wrong
+baud, or the M10 needs `EXTINT` rather than UART RX on this board, the symptom is a
+GPS that is simply absent after the first sleep — and every subsequent boot, since
+it stays in backup. Recovery is a power cycle, which is not obvious to anyone who has
+not read this. If that happens, the fallback is to cut ALDO4 during sleep after all
+and accept a cold start.
 
 **Nothing verifies the board actually stays asleep.** If a rail we disable feeds
 something that pulls GPIO0, the board would wake immediately and the symptom is a
