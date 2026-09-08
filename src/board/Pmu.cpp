@@ -38,6 +38,12 @@ bool Pmu::begin() {
   // enabled before this function ever ran -- so the radio has been powered
   // since the board was first flashed. Off, on every boot, not just in sleep.
   g_pmu.disableALDO3();
+  // Read back rather than assume. That ALDO3 is the LoRa rail comes from
+  // LilyGO's board support, and that the disable took comes from nothing at
+  // all until this line prints. Worth one log line before anyone unplugs an
+  // antenna on the strength of it.
+  Log::info("pmu", "LoRa rail ALDO3: %s",
+            g_pmu.isEnableALDO3() ? "STILL ON" : "off");
 
   // Everything else the board powers up with, restored explicitly. This is not
   // redundant: prepareForSleep() switches these off, deep sleep does not
