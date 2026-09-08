@@ -169,6 +169,53 @@ own defaults.
 
 ---
 
+## Sleep
+
+A triple click on the mode button sleeps the T-Beam; any press wakes it.
+
+**Why both gestures are on one button.** Keeping the GPS's memory alive means the
+ESP32 deep-sleeps rather than powering off, waking from deep sleep needs an RTC
+GPIO, and the ESP32-S3's stop at GPIO21 — `SOC_RTCIO_PIN_COUNT` is 22. The
+AXP2101's power key reaches the CPU only on GPIO 40, so it can *trigger* a sleep
+but can never wake one. GPIO0 is the only candidate.
+
+**Why triple click and not a longer hold.** The button already fires a radio
+switch at three seconds. A longer hold passes that on its way, so both actions
+would have had to be decided on release — a real change to a working gesture,
+bought for nothing.
+
+**The DevKitC cannot sleep at all.** Its mode button is GPIO39, past the RTC
+range, so a triple click there logs and does nothing. A board asleep with no wake
+source needs a power cycle to recover.
+
+**Waking on GPIO0 does not enter download mode.** The boot-mode straps are read
+at a power-on reset; a deep-sleep wake takes the ROM's fast path through the wake
+stub and never re-reads them.
+
+### The GPS is put to sleep, not powered off
+
+`UBX-RXM-PMREQ` (class 0x02, id 0x41, 16 bytes) places the M10 in software
+backup: it holds ephemeris, almanac and time in its own memory at about 15 µA
+while ALDO4 stays powered. Cutting ALDO4 instead would leave a warm start
+depending on whether this board routes `V_BCKP` to a backup supply, which is
+unknown — LilyGO's own support for the S3 Supreme never enables that rail.
+
+Two consequences, both of which otherwise present as a dead GPS:
+
+- **A receiver in backup is silent** and wakes on UART activity, so the baud probe
+  sends filler bytes before listening. Without that it reads as absent at every
+  baud, on every boot after the first sleep, recoverable only by a power cycle.
+- **Software backup keeps navigation data but not the RAM-layer configuration**,
+  so the receiver returns at its default baud emitting NMEA. The probe and
+  reconfiguration that already run on every boot cover this.
+
+### LoRa is off from boot
+
+The AXP2101 enables every rail by itself — a boot log reads `ALDO1=1 ALDO2=1
+ALDO3=1 ALDO4=1 BLDO1=1 BLDO2=1` before the firmware touches anything — so ALDO3
+had been powering a LoRa radio this project never uses since the board was first
+flashed.
+
 ## Serial
 
 ### Reading the port yourself returns zero bytes

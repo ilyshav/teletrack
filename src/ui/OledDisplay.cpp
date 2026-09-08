@@ -203,3 +203,16 @@ void OledDisplay::draw(const DeviceStatus& status) {
 
   u8g2_.sendBuffer();
 }
+
+void OledDisplay::sleep() {
+  if (!ready_) {
+    return;
+  }
+  // Acknowledge the gesture before everything goes dark. Without it a triple
+  // click and a crash look identical from the outside.
+  u8g2_.clearBuffer();
+  u8g2_.drawStr(1, kRowHeight - 1, "SLEEPING");
+  u8g2_.sendBuffer();
+  delay(600);  // long enough to read; the board is about to stop anyway
+  u8g2_.setPowerSave(1);
+}

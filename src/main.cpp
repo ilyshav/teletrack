@@ -3,6 +3,7 @@
 #include <math.h>
 
 #include <Arduino.h>
+#include <esp_sleep.h>
 
 #include "ble/BleLink.h"
 #include "ble/RaceChronoGps.h"
@@ -115,6 +116,38 @@ void stopCurrentMode(RadioMode leaving) {
     app.ble.end();
   }
 }
+
+#if defined(BOARD_TBEAM)
+
+void enterSleep() {
+  Log::info("sleep", "going down");
+  // The radio comes down the way a mode switch brings it down, so a connected
+  // client sees a clean disconnect rather than a link that simply stops.
+  stopCurrentMode(app.modes.mode());
+  // Before its neighbours lose power: the receiver has to be told to hold its
+  // own almanac while it still has a supply to be told over.
+  app.gpsRx.sleep();
+  app.display.sleep();
+  app.pmu.prepareForSleep();
+
+  // GPIO0 going low. It is a strapping pin, but a deep-sleep wake is not a
+  // power-on reset: the ROM takes its fast path through the wake stub and
+  // never re-reads the boot-mode straps, so waking on it cannot drop the
+  // board into download mode.
+  esp_sleep_enable_ext0_wakeup(static_cast<gpio_num_t>(BoardConfig::kModeButtonPin), 0);
+  esp_deep_sleep_start();  // does not return; a wake restarts setup()
+}
+
+#else
+
+void enterSleep() {
+  // This board's mode button is GPIO39, and the ESP32-S3's RTC GPIOs stop at
+  // 21, so nothing could wake it again. A board asleep with no wake source
+  // needs a power cycle to recover, which is worse than not sleeping.
+  Log::warn("sleep", "not supported on this board");
+}
+
+#endif
 
 #if !defined(BOARD_TBEAM)
 // Builds a synthetic fix walking a slow circle, at the wall-clock time
@@ -326,8 +359,7 @@ void loop() {
       break;
     }
     case ButtonEvent::TripleClick:
-      // Task 4 turns this into an actual sleep.
-      Log::info("sleep", "requested");
+      enterSleep();
       break;
     case ButtonEvent::None:
       break;
