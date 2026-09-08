@@ -102,9 +102,14 @@ void TftDisplay::drawHeader(const DeviceStatus& status) {
 
   // A hold in progress takes over the bottom-left field: it is the only
   // feedback that the button is doing anything.
-  if (status.holdMs > 0) {
+  // Only while the countdown is running: heldMs() keeps counting for as long
+  // as the button is down, so past kHoldMs the switch has already fired and
+  // the normal field is the useful thing again. Bounding it here also keeps
+  // the unsigned subtraction from wrapping and printing "HOLD 4294966s".
+  if (status.holdMs > 0 && status.holdMs < HoldDetector::kHoldMs) {
+    // Ceiling divide so it counts down 3, 2, 1 rather than 4, 3, 2.
     snprintf(bottomLeft, sizeof(bottomLeft), "HOLD %lus",
-             (unsigned long)((HoldDetector::kHoldMs - status.holdMs) / 1000u + 1u));
+             (unsigned long)((HoldDetector::kHoldMs - status.holdMs + 999u) / 1000u));
   }
 
   tft_.setTextDatum(TL_DATUM);

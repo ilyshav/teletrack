@@ -181,8 +181,48 @@ static void test_status_json_shape() {
   char buf[ConfigApi::kJsonBufferSize];
   ConfigApi::statusToJson(status, buf, sizeof(buf));
   TEST_ASSERT_EQUAL_STRING(
-      "{\"ssid\":\"teletrack\",\"ip\":\"192.168.4.1\",\"clients\":1,"
-      "\"uptimeMs\":134221,\"freeHeap\":186432,\"apUp\":true}",
+      "{\"ssid\":\"teletrack\",\"ip\":\"192.168.4.1\","
+      "\"clients\":1,\"uptimeMs\":134221,\"freeHeap\":186432,"
+      "\"apUp\":true,\"batteryPresent\":false,"
+      "\"batteryUsbPresent\":false,\"batteryCharging\":false,"
+      "\"batteryFull\":false,\"batteryPercent\":0,"
+      "\"batteryMilliVolts\":0}",
+      buf);
+}
+
+static void test_status_json_reports_a_charging_battery() {
+  DeviceStatus status;
+  status.batteryPresent = true;
+  status.batteryUsbPresent = true;
+  status.batteryCharging = true;
+  status.batteryPercent = 87;
+  status.batteryMilliVolts = 4052;
+
+  char buf[ConfigApi::kJsonBufferSize];
+  ConfigApi::statusToJson(status, buf, sizeof(buf));
+  TEST_ASSERT_EQUAL_STRING(
+      "{\"ssid\":\"\",\"ip\":\"\",\"clients\":0,\"uptimeMs\":0,"
+      "\"freeHeap\":0,\"apUp\":false,\"batteryPresent\":true,"
+      "\"batteryUsbPresent\":true,\"batteryCharging\":true,"
+      "\"batteryFull\":false,\"batteryPercent\":87,"
+      "\"batteryMilliVolts\":4052}",
+      buf);
+}
+
+static void test_status_json_tells_no_cell_apart_from_a_flat_one() {
+  // A board on USB with no cell fitted. Both cases report 0%, so
+  // batteryPresent is the only thing that distinguishes them.
+  DeviceStatus status;
+  status.batteryUsbPresent = true;
+
+  char buf[ConfigApi::kJsonBufferSize];
+  ConfigApi::statusToJson(status, buf, sizeof(buf));
+  TEST_ASSERT_EQUAL_STRING(
+      "{\"ssid\":\"\",\"ip\":\"\",\"clients\":0,\"uptimeMs\":0,"
+      "\"freeHeap\":0,\"apUp\":false,\"batteryPresent\":false,"
+      "\"batteryUsbPresent\":true,\"batteryCharging\":false,"
+      "\"batteryFull\":false,\"batteryPercent\":0,"
+      "\"batteryMilliVolts\":0}",
       buf);
 }
 
@@ -205,5 +245,7 @@ int main(int, char**) {
   RUN_TEST(test_apply_rejects_an_explicit_null_device_name);
   RUN_TEST(test_apply_rejects_negative_and_out_of_range_sample_hz);
   RUN_TEST(test_status_json_shape);
+  RUN_TEST(test_status_json_reports_a_charging_battery);
+  RUN_TEST(test_status_json_tells_no_cell_apart_from_a_flat_one);
   return UNITY_END();
 }

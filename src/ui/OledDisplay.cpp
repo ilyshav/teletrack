@@ -5,36 +5,30 @@
 #include <stdio.h>
 
 #include "board/BoardConfig.h"
-#include "core/Format.h"
 #include "core/Log.h"
 #include "radio/HoldDetector.h"
 
 namespace {
 
-// Same fields the TFT header compares, so the panel repaints when anything
-// visible changes and not otherwise.
 bool headerDiffers(const DeviceStatus& a, const DeviceStatus& b) {
-  // The name is not drawn here, so a rename does not dirty the header.
-  return a.clients != b.clients || a.apUp != b.apUp || a.mode != b.mode ||
-         a.bleConnected != b.bleConnected || a.dropped != b.dropped ||
-         (a.holdMs / 100u) != (b.holdMs / 100u) ||
-         (a.uptimeMs / 1000u) != (b.uptimeMs / 1000u) ||
+  // Only what is actually drawn. Uptime, the client count and the drop count
+  // left the header, so comparing them would repaint for nothing; the battery
+  // fields arrived, and omitting one freezes it on a stale value.
+  return a.mode != b.mode || (a.holdMs / 100u) != (b.holdMs / 100u) ||
+         a.batteryPresent != b.batteryPresent ||
+         a.batteryCharging != b.batteryCharging ||
+         a.batteryFull != b.batteryFull ||
+         a.batteryPercent != b.batteryPercent ||
+         a.batteryMilliVolts != b.batteryMilliVolts ||
          a.gpsPresent != b.gpsPresent || a.gpsTimeValid != b.gpsTimeValid ||
          a.gpsFix.satellites != b.gpsFix.satellites ||
          a.gpsFix.fixType != b.gpsFix.fixType ||
-         a.gpsFix.latE7 != b.gpsFix.latE7 || a.gpsFix.lonE7 != b.gpsFix.lonE7 ||
-         a.gpsFix.seconds != b.gpsFix.seconds ||
-         // fixQuality decides between the coordinate rows and "ACQUIRING", and
-         // it can change while fixType does not: gnssFixOK going false->true
-         // with fixType already 3 takes quality 0->1. Without this the panel
-         // keeps saying ACQUIRING after the fix has arrived.
          a.gpsFix.fixQuality != b.gpsFix.fixQuality ||
-         // Drawn on rows 3 and 4, and they drift with satellite geometry while
-         // a stationary receiver holds the same position. Comparing floats
-         // cannot cause a busy loop: tick() is already capped to 10 Hz.
+         a.gpsFix.latE7 != b.gpsFix.latE7 || a.gpsFix.lonE7 != b.gpsFix.lonE7 ||
          a.gpsFix.altitudeM != b.gpsFix.altitudeM ||
          a.gpsFix.speedKmh != b.gpsFix.speedKmh ||
-         a.gpsFix.hdop != b.gpsFix.hdop;
+         a.gpsFix.hdop != b.gpsFix.hdop ||
+         a.gpsFix.seconds != b.gpsFix.seconds;
 }
 
 }  // namespace
@@ -98,35 +92,49 @@ void OledDisplay::draw(const DeviceStatus& status) {
   // 1 KB over I2C at 400 kHz is about 25 ms, inside the 100 ms budget.
   u8g2_.clearBuffer();
 
+  // Battery on the left. The state character sits between the percentage and
+  // the voltage so the two numbers stay adjacent and readable at a glance.
   char left[kCols + 1];
-  if (status.holdMs > 0) {
-    snprintf(left, sizeof(left), "HOLD %lus",
-             (unsigned long)((HoldDetector::kHoldMs - status.holdMs) / 1000u + 1u));
-  } else if (status.mode == RadioMode::Wifi) {
-    if (status.apUp) {
-      snprintf(left, sizeof(left), "AP UP %u cli", (unsigned)status.clients);
-    } else {
-      snprintf(left, sizeof(left), "AP FAIL");
-    }
-  } else if (status.bleConnected) {
-    if (status.dropped > 0) {
-      snprintf(left, sizeof(left), "BLE CONN d%u", (unsigned)status.dropped);
-    } else {
-      snprintf(left, sizeof(left), "BLE CONN");
-    }
+  if (!status.batteryPresent) {
+    // No cell fitted. "0%- 0.00V" would be a lie, and a bench T-Beam running
+    // on USB alone is how most of this gets tested.
+    snprintf(left, sizeof(left), "USB");
   } else {
-    snprintf(left, sizeof(left), "BLE ADV");
+    const char state = status.batteryFull      ? '='
+                       : status.batteryCharging ? '+'
+                                                : '-';
+    snprintf(left, sizeof(left), "%u%%%c %u.%02uV",
+             static_cast<unsigned>(status.batteryPercent), state,
+             static_cast<unsigned>(status.batteryMilliVolts / 1000u),
+             static_cast<unsigned>((status.batteryMilliVolts % 1000u) / 10u));
   }
 
-  char stamp[9];
-  Format::uptime(status.uptimeMs, stamp, sizeof(stamp));
+  // Which radio is running, and nothing about who is connected to it. The
+  // client and drop counts are in /api/status, which is where they are read.
+  char right[kCols + 1];
+  // Only while the countdown is actually running. heldMs() keeps counting for
+  // as long as the button is down -- fired_ stops the switch repeating, not
+  // the timer -- so past kHoldMs the switch has already happened and the new
+  // radio is the useful thing to show. Bounding it here also keeps the
+  // unsigned subtraction below from wrapping to ~4.29 billion and printing
+  // "HOLD 4294966s", which is 13 columns on a 21-column panel.
+  if (status.holdMs > 0 && status.holdMs < HoldDetector::kHoldMs) {
+    // The only feedback that a three-second hold is registering at all.
+    // Ceiling divide so it counts down 3, 2, 1 rather than 4, 3, 2.
+    snprintf(right, sizeof(right), "HOLD %lus",
+             static_cast<unsigned long>(
+                 (HoldDetector::kHoldMs - status.holdMs + 999u) / 1000u));
+  } else {
+    snprintf(right, sizeof(right), "%s",
+             status.mode == RadioMode::Wifi ? "AP" : "BLE");
+  }
 
-  // One inverse-video row. It separates header from log without spending a
-  // row on a rule, and the widest state string plus the stamp is 20 columns.
+  // One inverse-video row. Widest case is "100%= 4.20V" (11) against
+  // "HOLD 3s" (7), which is 20 of 21 columns with a separator.
   u8g2_.drawBox(0, 0, 128, kHeaderRows * kRowHeight);
   u8g2_.setDrawColor(0);
   u8g2_.drawStr(1, kRowHeight - 1, left);
-  u8g2_.drawStr(128 - 1 - u8g2_.getStrWidth(stamp), kRowHeight - 1, stamp);
+  u8g2_.drawStr(128 - 1 - u8g2_.getStrWidth(right), kRowHeight - 1, right);
   u8g2_.setDrawColor(1);
 
   // Row 1: satellite count and fix state. The count is the number that

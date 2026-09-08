@@ -41,6 +41,12 @@ size_t statusToJson(const DeviceStatus& status, char* out, size_t outSize) {
   doc["uptimeMs"] = status.uptimeMs;
   doc["freeHeap"] = status.freeHeap;
   doc["apUp"] = status.apUp;
+  doc["batteryPresent"] = status.batteryPresent;
+  doc["batteryUsbPresent"] = status.batteryUsbPresent;
+  doc["batteryCharging"] = status.batteryCharging;
+  doc["batteryFull"] = status.batteryFull;
+  doc["batteryPercent"] = status.batteryPercent;
+  doc["batteryMilliVolts"] = status.batteryMilliVolts;
   return serializeJson(doc, out, outSize);
 }
 
