@@ -2,8 +2,7 @@
 
 **Date:** 2026-09-08
 **Status:** Draft, awaiting review
-**This describes a SEPARATE project.** It lives here only until that repository
-exists; move it there when it does.
+**This is a second environment in `teletrack`, not a separate project.** See §1.
 
 ## 1. Goal
 
@@ -14,14 +13,27 @@ The point is the frames nobody has decoded yet. The community database has
 throttle, speed, RPM, brake and steering; it is missing fuel level, coolant
 temperature, clutch position and selected gear. Finding those is what this is for.
 
-### Why a separate project, not another environment in `teletrack`
+### Why this lives here, as `[env:sniffer]`
 
-The overlap turned out to be a TWAI init and a read loop. Different board, no
-PMU, no OLED, no BLE, no GPS — none of `teletrack`'s board knowledge applies, and
-an environment sharing none of its modules is two programs in one folder rather
-than reuse.
+It runs on **the ESP32-S3-DevKitC-1 from this project**, TFT and all — which is
+the board `[env:esp]` already supports, and that support was expensive:
 
-The one thing that should flow back is **data**: any ID decoded here belongs in
+- `-DUSE_FSPI_PORT`, without which `TFT_eSPI::init()` null-derefs on the S3
+- `board_upload.flash_size` and `board_upload.maximum_size`, without which the
+  board boot-loops on a 16 MB partition table
+- `board_build.arduino.memory_type = qio_opi` for the octal PSRAM
+- `build_unflags = -std=gnu++11`, without which our `-std=gnu++17` is silently
+  overridden by the core
+
+A separate repository would copy all of that and then drift from it. `TftDisplay`
+and `LogRing` come along too, which is where §7's screen comes from.
+
+The environment excludes `main.cpp` and everything the sniffer does not need —
+BLE, GPS, the PMU, the config portal — the same `build_src_filter` mechanism that
+already keeps `OledDisplay.cpp` out of one environment and `TftDisplay.cpp` out of
+the other.
+
+**What does not flow back is data.** Any ID decoded with this belongs in
 `teletrack`'s CAN spec, beside the bus it describes.
 
 ### Out of scope
@@ -34,21 +46,32 @@ The one thing that should flow back is **data**: any ID decoded here belongs in
 
 ## 2. Hardware
 
-A plain ESP32 devboard, an SN65HVD230 module, an SD card.
+The ESP32-S3-DevKitC-1 already used by `[env:esp]`, with its ILI9341 TFT, plus an
+SN65HVD230 module and an SD card breakout. No PMU and no battery: it runs from
+USB, so in the car it needs a 12 V adapter.
+
+Pins, chosen from what this board has left. The TFT holds 8, 9, 10, 11, 12 and
+21; the mode button 39; USB 19 and 20; and flash with the **octal** PSRAM claims
+26 through 37 — an N16R8 part, so 33-37 are not free here even though they would
+be on a quad-PSRAM board.
 
 ```
-CAN TX   -> GPIO 21          CAN RX  -> GPIO 22
-SD SCK   -> GPIO 18          SD MISO -> GPIO 19
-SD MOSI  -> GPIO 23          SD CS   -> GPIO 5
+CAN TX   -> GPIO 17          CAN RX  -> GPIO 18
+SD SCK   -> GPIO 13          SD MISO -> GPIO 14
+SD MOSI  -> GPIO 15          SD CS   -> GPIO 16
 CANH -> OBD-II pin 6         CANL -> OBD-II pin 14
 ```
+
+The SD card gets its own SPI bus rather than sharing the TFT's. Sharing would
+mean arbitrating between a display refresh and an 8 kB block write, and the whole
+design exists to keep those writes from being interrupted.
 
 500 kbps, the ND's powertrain rate.
 
 **The SN65HVD230's 120 Ω terminator must be removed** — the SMD resistor marked
 `121`, pads left open, not bridged. The car's bus is terminated at both ends
-already. This is the same module and the same modification as `teletrack`; if
-both devices are ever plugged in at once, both need it done.
+already. Same module and same modification as the T-Beam build; if both are ever
+plugged in at once, both need it.
 
 **If no frames arrive, swap CAN RX and TX first.** These modules are inconsistent
 about whose perspective the labels take, and in listen-only mode a swap gives
@@ -141,18 +164,30 @@ Time Stamp,ID,Extended,Dir,Bus,LEN,D1,D2,D3,D4,D5,D6,D7,D8
 Writing that converter is an afternoon. Writing an analysis UI is not, and the
 result would be worse than what already exists.
 
-## 7. Knowing it is working, without a screen
+## 7. Knowing it is working
 
-There is no display. Serial reports once a second:
+The TFT comes free with the board, and `TftDisplay` and `LogRing` already draw a
+header and a scrolling log. The sniffer reuses them rather than inventing a
+screen: the header carries the numbers that matter, the log carries what
+happened.
 
 ```
-can: 1847 fps, 0 dropped, file CAN0003.BIN, 12.4 MB
++-----------------------------------------------------+
+| 1847 fps  0 drop              CAN0003.BIN   12.4 MB |
+|                                                     |
+| can: bus up at 500 kbps, listen-only                |
+| sd: card 29.7 GB, next file CAN0003.BIN             |
+| can: first frame, id 0x202                          |
++-----------------------------------------------------+
 ```
 
-That single line answers every question worth asking in the car: is the bus
-alive, is anything being lost, is it still writing, and how far in. **A frame rate
-of zero is the signal that the wiring is wrong** — and it is what tells you to try
-swapping RX and TX.
+Those four numbers answer everything worth asking in the car: is the bus alive,
+is anything being lost, is it still writing, and how far in.
+
+**A frame rate of zero is the signal that the wiring is wrong** — and it is what
+tells you to swap RX and TX before suspecting anything else.
+
+Serial carries the same lines, for when the car is somewhere the screen is not.
 
 ## 8. Testing
 
@@ -168,7 +203,8 @@ ring buffer:
 - The drop counter is carried into the next record written and then cleared.
 - A `micros()` wrap does not reorder records or produce a negative interval.
 
-**No host tests for the TWAI driver or the SD writer** — I/O shells.
+**No host tests for the TWAI driver or the SD writer** — I/O shells, like every
+other driver in this repository.
 
 **On hardware:** frames appear with the engine running; the rate is plausible for
 a 500 kbps bus, in the hundreds to low thousands; nothing is dropped at idle;
@@ -183,7 +219,9 @@ last flush.
       happened.
 - [ ] Pulling the power leaves a file readable up to the last flush.
 - [ ] The converter produces CSV that SavvyCAN imports without editing.
-- [ ] Serial shows frame rate, drops and file position once a second.
+- [ ] The TFT shows frame rate, drops, file name and size, updated once a second.
+- [ ] `[env:esp]` still builds and behaves exactly as before — the sniffer is
+      additive and must not disturb the board that works.
 - [ ] A byte visibly changes in SavvyCAN when a control is operated — the whole
       point, and the only end-to-end proof.
 
@@ -199,6 +237,11 @@ tap elsewhere on the bus.
 **Card speed varies wildly.** A slow or worn card stalls longer than the ring can
 absorb. The dropped counter is what makes that visible instead of mysterious; the
 fix is a better card, not more buffering.
+
+**The dual-core split assumes the display stays off the write path.** `TftDisplay`
+redraws are SPI traffic on their own bus, but they still consume a core. The
+writer core must do nothing but write; if the screen update lands there, an SD
+stall and a redraw will collide and the ring will not save you.
 
 **Capturing everything means capturing everything.** A busy bus at 2000 frames a
 second fills a gigabyte in seven hours. That is fine for a session and wrong for
