@@ -251,65 +251,82 @@ over minutes."
 - Consumes: `BatteryState` semantics from Task 1 (the fields carry the same meanings).
 - Produces: `DeviceStatus::batteryPresent`, `batteryUsbPresent`, `batteryCharging`, `batteryFull` (all `bool`), `batteryPercent` (`uint8_t`), `batteryMilliVolts` (`uint16_t`). JSON keys `batteryPresent`, `batteryUsbPresent`, `batteryCharging`, `batteryFull`, `batteryPercent`, `batteryMilliVolts`.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the failing tests**
 
-Add to `test/native/test_config_api/test_config_api.cpp`, before `int main`:
+`test_config_api.cpp` asserts the **complete** JSON string, not individual fields,
+so adding six keys breaks the existing `test_status_json_shape`. Update it rather
+than working around it — that whole-document assertion is what catches a renamed or
+reordered field, and it is worth keeping.
+
+Note the namespace: it is `ConfigApi::statusToJson`, and the buffer is
+`ConfigApi::kJsonBufferSize` (512, against a 235-byte document — no overflow).
+
+Replace the expected string in the existing `test_status_json_shape` with:
 
 ```cpp
-static void test_status_json_carries_battery_fields() {
+  TEST_ASSERT_EQUAL_STRING(
+      "{\"ssid\":\"teletrack\",\"ip\":\"192.168.4.1\","
+      "\"clients\":1,\"uptimeMs\":134221,\"freeHeap\":186432,"
+      "\"apUp\":true,\"batteryPresent\":false,"
+      "\"batteryUsbPresent\":false,\"batteryCharging\":false,"
+      "\"batteryFull\":false,\"batteryPercent\":0,"
+      "\"batteryMilliVolts\":0}",
+      buf);
+```
+
+Then add two tests before `int main`:
+
+```cpp
+static void test_status_json_reports_a_charging_battery() {
   DeviceStatus status;
   status.batteryPresent = true;
   status.batteryUsbPresent = true;
   status.batteryCharging = true;
-  status.batteryFull = false;
   status.batteryPercent = 87;
   status.batteryMilliVolts = 4052;
 
-  char out[512];
-  const size_t written = statusToJson(status, out, sizeof(out));
-  TEST_ASSERT_TRUE(written > 0);
-
-  JsonDocument doc;
-  TEST_ASSERT_EQUAL(DeserializationError::Ok, deserializeJson(doc, out));
-  TEST_ASSERT_TRUE(doc["batteryPresent"].as<bool>());
-  TEST_ASSERT_TRUE(doc["batteryUsbPresent"].as<bool>());
-  TEST_ASSERT_TRUE(doc["batteryCharging"].as<bool>());
-  TEST_ASSERT_FALSE(doc["batteryFull"].as<bool>());
-  TEST_ASSERT_EQUAL_UINT8(87, doc["batteryPercent"].as<uint8_t>());
-  TEST_ASSERT_EQUAL_UINT16(4052, doc["batteryMilliVolts"].as<uint16_t>());
+  char buf[ConfigApi::kJsonBufferSize];
+  ConfigApi::statusToJson(status, buf, sizeof(buf));
+  TEST_ASSERT_EQUAL_STRING(
+      "{\"ssid\":\"\",\"ip\":\"\",\"clients\":0,\"uptimeMs\":0,"
+      "\"freeHeap\":0,\"apUp\":false,\"batteryPresent\":true,"
+      "\"batteryUsbPresent\":true,\"batteryCharging\":true,"
+      "\"batteryFull\":false,\"batteryPercent\":87,"
+      "\"batteryMilliVolts\":4052}",
+      buf);
 }
 
-static void test_status_json_with_no_battery_reports_absent_not_zero_percent() {
-  // A board running on USB with no cell fitted. The consumer has to be able
-  // to tell that apart from a flat battery, which is also 0%.
+static void test_status_json_tells_no_cell_apart_from_a_flat_one() {
+  // A board on USB with no cell fitted. Both cases report 0%, so
+  // batteryPresent is the only thing that distinguishes them.
   DeviceStatus status;
-  status.batteryPresent = false;
   status.batteryUsbPresent = true;
 
-  char out[512];
-  TEST_ASSERT_TRUE(statusToJson(status, out, sizeof(out)) > 0);
-
-  JsonDocument doc;
-  TEST_ASSERT_EQUAL(DeserializationError::Ok, deserializeJson(doc, out));
-  TEST_ASSERT_FALSE(doc["batteryPresent"].as<bool>());
-  TEST_ASSERT_TRUE(doc["batteryUsbPresent"].as<bool>());
-  TEST_ASSERT_EQUAL_UINT8(0, doc["batteryPercent"].as<uint8_t>());
+  char buf[ConfigApi::kJsonBufferSize];
+  ConfigApi::statusToJson(status, buf, sizeof(buf));
+  TEST_ASSERT_EQUAL_STRING(
+      "{\"ssid\":\"\",\"ip\":\"\",\"clients\":0,\"uptimeMs\":0,"
+      "\"freeHeap\":0,\"apUp\":false,\"batteryPresent\":false,"
+      "\"batteryUsbPresent\":true,\"batteryCharging\":false,"
+      "\"batteryFull\":false,\"batteryPercent\":0,"
+      "\"batteryMilliVolts\":0}",
+      buf);
 }
 ```
 
-Register both in `main`, alongside the existing `RUN_TEST` lines:
+Register both in `main`, after the existing `RUN_TEST(test_status_json_shape);`:
 
 ```cpp
-  RUN_TEST(test_status_json_carries_battery_fields);
-  RUN_TEST(test_status_json_with_no_battery_reports_absent_not_zero_percent);
+  RUN_TEST(test_status_json_reports_a_charging_battery);
+  RUN_TEST(test_status_json_tells_no_cell_apart_from_a_flat_one);
 ```
-
-If `<ArduinoJson.h>` is not already included by that test file, add it at the top — `[env:native]` already has `bblanchon/ArduinoJson` in `lib_deps`.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `export PATH="$HOME/.platformio/penv/bin:$PATH" && pio test -e native -f native/test_config_api`
 Expected: a compile error — `'struct DeviceStatus' has no member named 'batteryPresent'`.
+The updated `test_status_json_shape` would also fail on its expected string, but the
+compile error comes first.
 
 - [ ] **Step 3: Add the fields to `src/core/DeviceStatus.h`**
 
