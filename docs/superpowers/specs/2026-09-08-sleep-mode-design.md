@@ -21,29 +21,24 @@ T-Beam Supreme only. The ESP32-S3-DevKitC-1 has no PMU and no power button.
 - **Sleeping the GPS while the rest runs.** That is a power optimisation for the
   running state, not a sleep mode.
 
-## 2. One button, two gestures that cannot be confused
+## 2. Everything is on the mode button, and it has to be
 
-`features.md` asks for "another button, not mode switcher". LilyGO's board support
-declares exactly one user button:
+`features.md` asks for sleep on "another button, not mode switcher", and for waking
+on that same button. Neither is possible here, so both gestures live on GPIO0.
 
-```
-#define BUTTON_PIN   (0)
-#define BUTTON_COUNT (1)
-#define PMU_IRQ      (40)
-```
+LilyGO's board support declares exactly one user button — `BUTTON_PIN (0)`,
+`BUTTON_COUNT (1)` — and GPIO0 is already the mode switch. The board's other button
+is the power key, wired to the AXP2101 and reported over I2C on GPIO 40.
 
-The other button on the board is the power key, wired to the AXP2101 and reported
-over I2C on GPIO 40. It works as a *sleep* trigger — but it cannot **wake** the chip,
-and that decides the design.
+The power key can *trigger* a sleep. It cannot *wake* the chip. Keeping the GPS
+backup RAM alive means the PMU stays powered and the ESP32 deep-sleeps rather than
+switching off; waking from deep sleep needs an RTC GPIO; and the S3's stop at
+GPIO21 — `SOC_RTCIO_PIN_COUNT` is 22 and the last channel defined is
+`RTCIO_GPIO21_CHANNEL`. GPIO 40 is not among them.
 
-### Why the power key cannot wake it
-
-Keeping the GPS's backup RAM alive means the PMU must stay powered, which means the
-ESP32 must sleep rather than be switched off. Waking from deep sleep needs an RTC
-GPIO, and on the ESP32-S3 those stop at GPIO21 — `SOC_RTCIO_PIN_COUNT` is 22 and the
-last channel defined is `RTCIO_GPIO21_CHANNEL`. The PMU's interrupt line is GPIO 40.
-
-So the only button that can wake this board is **GPIO0, the mode button**.
+Using it for sleep and GPIO0 for wake was considered and rejected: two buttons for
+one feature, where the one you press to sleep is not the one that brings it back.
+§3 is how one button carries both gestures without them colliding.
 
 ## 3. Triple click to sleep
 
