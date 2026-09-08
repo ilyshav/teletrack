@@ -115,9 +115,17 @@ void OledDisplay::draw(const DeviceStatus& status) {
   if (status.holdMs > 0) {
     // Not a connection detail: the only feedback that a three-second hold is
     // registering at all. Without it the button feels broken.
+    // heldMs() keeps counting while the button is down -- fired_ stops the
+    // switch repeating, not the timer -- so holdMs runs past kHoldMs whenever
+    // the button is held a moment longer than three seconds, which is every
+    // time. Unsigned subtraction then wrapped to ~4.29 billion and printed
+    // "HOLD 4294966s", 13 columns, which collides with the battery on a
+    // 21-column panel. Clamp, and use a ceiling divide so it counts 3, 2, 1.
+    const uint32_t remainingMs = status.holdMs >= HoldDetector::kHoldMs
+                                     ? 0u
+                                     : HoldDetector::kHoldMs - status.holdMs;
     snprintf(right, sizeof(right), "HOLD %lus",
-             static_cast<unsigned long>(
-                 (HoldDetector::kHoldMs - status.holdMs) / 1000u + 1u));
+             static_cast<unsigned long>((remainingMs + 999u) / 1000u));
   } else {
     snprintf(right, sizeof(right), "%s",
              status.mode == RadioMode::Wifi ? "AP" : "BLE");
