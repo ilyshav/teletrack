@@ -55,7 +55,9 @@ module CANL    -> OBD-II pin 14
 ```
 
 GPIO 15 and 16 are unclaimed in LilyGO's pin map for this board, are not
-strapping pins, and are not USB or flash. They live in `BoardConfig.h` beside the
+strapping pins, and are not USB or flash. **Not 17 and 18** — those are this
+board's I2C bus and the OLED sits on them; the sniffer design uses 17/18 because
+it runs on the DevKitC, where they are free. They live in `BoardConfig.h` beside the
 GPS pins, so moving them once the board is in hand is a one-line change.
 
 **The module's 120 Ω terminator must be removed** — the SMD resistor marked
