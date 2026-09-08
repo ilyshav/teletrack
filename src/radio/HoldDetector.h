@@ -38,6 +38,11 @@ class HoldDetector {
   bool isHolding() const { return pressed_; }
 
  private:
+  // Turns the release that just ended into a click, or discards it if the
+  // press was too long to be one. Called from both places a release can be
+  // recognised -- see the comment at its definition.
+  ButtonEvent classifyRelease(uint32_t releasedAtMs);
+
   bool pressed_ = false;
   bool fired_ = false;
   uint32_t pressStartMs_ = 0;

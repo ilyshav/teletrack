@@ -117,9 +117,13 @@ static void test_a_long_press_is_not_a_click() {
   uint32_t now = 0;
   feed(d, now, 60, 100);
   feed(d, now, 60, 100);
-  // Two clicks, then a press longer than kClickMaxMs. It must not complete the
-  // sequence -- it resets it -- so the next click cannot fire TripleClick.
-  feed(d, now, HoldDetector::kClickMaxMs + 100, 100);
+  // Two clicks, then a press longer than kClickMaxMs. Asserting on this call
+  // is the point: without it, deleting the guard entirely still passes. The
+  // long press would push the count to three, fire a TripleClick nobody
+  // checked, and reset the count -- leaving the final assertion below true for
+  // completely the wrong reason.
+  TEST_ASSERT_EQUAL(ButtonEvent::None,
+                    feed(d, now, HoldDetector::kClickMaxMs + 100, 100));
   TEST_ASSERT_EQUAL(ButtonEvent::None, feed(d, now, 60, 100));
 }
 
@@ -154,6 +158,25 @@ static void test_bouncing_contacts_do_not_manufacture_a_triple_click() {
   }
 }
 
+static void test_a_click_survives_a_loop_that_misses_the_release() {
+  // loop() does not sample every millisecond. One display redraw blocks the
+  // I2C bus for about 25 ms, and a radio restart far longer, so a release can
+  // go entirely unobserved: the next sample sees the button already pressed
+  // again. The click still has to count, or three deliberate clicks register
+  // two and the gesture silently does nothing.
+  HoldDetector d;
+  d.update(true, 0);
+  d.update(false, 60);   // release begins
+  d.update(true, 200);   // no sample in between -- already pressed again
+
+  d.update(false, 260);
+  d.update(false, 400);  // this release is observed normally
+
+  d.update(true, 500);
+  d.update(false, 560);
+  TEST_ASSERT_EQUAL(ButtonEvent::TripleClick, d.update(false, 700));
+}
+
 static void test_held_ms_reports_progress_and_zero_when_idle() {
   HoldDetector d;
   TEST_ASSERT_EQUAL_UINT32(0, d.heldMs(0));
@@ -186,6 +209,7 @@ int main(int, char**) {
   RUN_TEST(test_a_long_press_is_not_a_click);
   RUN_TEST(test_a_hold_still_works_after_two_clicks);
   RUN_TEST(test_bouncing_contacts_do_not_manufacture_a_triple_click);
+  RUN_TEST(test_a_click_survives_a_loop_that_misses_the_release);
   RUN_TEST(test_held_ms_reports_progress_and_zero_when_idle);
   RUN_TEST(test_held_ms_keeps_counting_past_the_hold_threshold);
   return UNITY_END();
