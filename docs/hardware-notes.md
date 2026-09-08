@@ -486,6 +486,25 @@ characteristics that are still there rather than building them again.
 The reference implementation never deinitialises either. Calling it was our
 invention, and it had two separate ways to crash the board.
 
+### The BLE host task is on core 0, loop() is on core 1
+
+NimBLE pins its host task with `CONFIG_BT_NIMBLE_PINNED_TO_CORE`, which is 0,
+while Arduino's `loop()` runs on `ARDUINO_RUNNING_CORE`, which is 1. Anything
+shared between a BLE callback and `loop()` therefore crosses cores.
+
+`volatile` is not enough for that. It constrains how the compiler treats one
+object and promises nothing about the order two cores observe two different
+writes. The CAN filter queue publishes a payload and then an index; without
+release/acquire the consumer can see the new index and read a slot that is not
+written yet -- applying a wrong id or interval rather than dropping a command,
+which is the failure nothing counts.
+
+The queue uses `std::atomic<uint8_t>` with a release store on the producer's
+index and an acquire load on the consumer's. Two other things already live on
+this boundary and are safe for a different reason: the log flags are single
+booleans where a stale read costs one frame of latency, and the connection state
+is a single bool.
+
 ### NimBLE version
 
 Pin **`h2zero/NimBLE-Arduino@^1.4.3`**. The 2.x line requires Arduino core 3.x / ESP-IDF

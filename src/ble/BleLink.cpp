@@ -1,5 +1,7 @@
 #include "ble/BleLink.h"
 
+#include <atomic>
+
 #include <string.h>
 
 #include <NimBLEDevice.h>
@@ -35,8 +37,16 @@ constexpr size_t kFilterQueueDepth = 8;
 constexpr size_t kFilterCmdBytes = 7;
 uint8_t g_filterQueue[kFilterQueueDepth][kFilterCmdBytes];
 uint8_t g_filterLens[kFilterQueueDepth];
-volatile uint8_t g_filterHead = 0;
-volatile uint8_t g_filterTail = 0;
+// Atomics, not volatile. NimBLE's host task is pinned to core 0
+// (CONFIG_BT_NIMBLE_PINNED_TO_CORE) and loop() runs on core 1, so this queue
+// genuinely crosses cores. volatile constrains only the compiler's treatment of
+// one object: it gives no guarantee that the payload write lands before the
+// index that publishes it. Without release/acquire the consumer can see the new
+// head and read a stale slot -- applying a wrong id or interval to a channel,
+// which is worse than the dropped command the overflow counter catches,
+// because nothing reports it.
+std::atomic<uint8_t> g_filterHead{0};
+std::atomic<uint8_t> g_filterTail{0};
 uint32_t g_filterOverflows = 0;
 
 bool g_logConnected = false;
@@ -82,14 +92,16 @@ class FilterCallbacks : public NimBLECharacteristicCallbacks {
     if (value.empty() || value.size() > kFilterCmdBytes) {
       return;
     }
-    const uint8_t next = static_cast<uint8_t>((g_filterHead + 1) % kFilterQueueDepth);
-    if (next == g_filterTail) {
+    const uint8_t head = g_filterHead.load(std::memory_order_relaxed);
+    const uint8_t next = static_cast<uint8_t>((head + 1) % kFilterQueueDepth);
+    if (next == g_filterTail.load(std::memory_order_acquire)) {
       ++g_filterOverflows;
       return;
     }
-    memcpy(g_filterQueue[g_filterHead], value.data(), value.size());
-    g_filterLens[g_filterHead] = static_cast<uint8_t>(value.size());
-    g_filterHead = next;
+    memcpy(g_filterQueue[head], value.data(), value.size());
+    g_filterLens[head] = static_cast<uint8_t>(value.size());
+    // Release: everything written above is visible before the new head is.
+    g_filterHead.store(next, std::memory_order_release);
   }
 };
 
@@ -250,11 +262,17 @@ void BleLink::publishCan(const uint8_t* packet, size_t len) {
 }
 
 bool BleLink::takeFilterCommand(uint8_t* out, size_t& len) {
-  if (g_filterTail == g_filterHead) {
+  const uint8_t tail = g_filterTail.load(std::memory_order_relaxed);
+  // Acquire: pairs with the producer's release, so a slot the head points past
+  // is fully written before it is read here.
+  if (tail == g_filterHead.load(std::memory_order_acquire)) {
     return false;
   }
-  len = g_filterLens[g_filterTail];
-  memcpy(out, g_filterQueue[g_filterTail], len);
-  g_filterTail = static_cast<uint8_t>((g_filterTail + 1) % kFilterQueueDepth);
+  len = g_filterLens[tail];
+  memcpy(out, g_filterQueue[tail], len);
+  g_filterTail.store(static_cast<uint8_t>((tail + 1) % kFilterQueueDepth),
+                     std::memory_order_release);
   return true;
 }
+
+uint32_t BleLink::filterOverflows() const { return g_filterOverflows; }

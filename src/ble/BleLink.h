@@ -52,6 +52,10 @@ class BleLink {
   // queue is filled on the BLE host task.
   bool takeFilterCommand(uint8_t* out, size_t& len);
 
+  // Filter writes dropped because the queue was full. A dropped command is a
+  // channel that never appears in the app, so this is reported, not just kept.
+  uint32_t filterOverflows() const;
+
   bool connected() const { return connected_; }
   uint16_t mtu() const { return mtu_; }
   uint32_t sentBytes() const { return sentBytes_; }

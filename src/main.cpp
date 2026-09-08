@@ -311,6 +311,23 @@ void pumpCanBus(uint32_t nowMs) {
     }
   }
 
+  // Both counters exist so a loss is noticed rather than guessed at, which
+  // only works if something reads them. Reported on change, not every pass.
+  static uint32_t reportedOverflows = 0;
+  static uint32_t reportedDropped = 0;
+  const uint32_t overflows = app.ble.filterOverflows();
+  if (overflows != reportedOverflows) {
+    reportedOverflows = overflows;
+    Log::warn("can", "%lu filter commands dropped, queue full",
+              static_cast<unsigned long>(overflows));
+  }
+  const uint32_t dropped = app.canFilter.droppedUnknown();
+  if (dropped != reportedDropped) {
+    reportedDropped = dropped;
+    Log::warn("can", "%lu ids seen after the table filled",
+              static_cast<unsigned long>(dropped));
+  }
+
   // Bounded so a busy bus cannot monopolise a pass of loop().
   CanFrame frame;
   for (int i = 0; i < 32 && app.can.read(frame); ++i) {
