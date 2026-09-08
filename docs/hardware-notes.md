@@ -402,6 +402,26 @@ thing with no bus. What matters is that the write succeeds.
 The handler logs the command byte it received, so the boot log now says whether
 RaceChrono talks to that characteristic at all.
 
+### `NimBLEDevice::deinit()` crashes the host task with PC=0
+
+**Symptom:** `Guru Meditation Error: Core 0 panic'ed (InstrFetchProhibited)`,
+`PC : 0x00000000`, backtrace one frame deep in
+`NimBLEDevice::host_task at NimBLEDevice.cpp:837`. Seen on a mode switch, and
+again on entering sleep — anything that called `BleLink::end()`.
+
+**Cause:** line 837 is `nimble_port_run()`, the loop the NimBLE host task lives
+in. `deinit()` calls `nimble_port_stop()` and then frees the port out from under
+that task, which then dispatches an event whose handler is null.
+
+**Fix: do not deinitialise.** `end()` stops advertising and disconnects the peer,
+and leaves the stack running. That is all a mode switch or a sleep needs — the
+radio is silent and the front end is free — and `begin()` checks
+`NimBLEDevice::getInitialized()` so a later restart reuses the service and
+characteristics that are still there rather than building them again.
+
+The reference implementation never deinitialises either. Calling it was our
+invention, and it had two separate ways to crash the board.
+
 ### NimBLE version
 
 Pin **`h2zero/NimBLE-Arduino@^1.4.3`**. The 2.x line requires Arduino core 3.x / ESP-IDF

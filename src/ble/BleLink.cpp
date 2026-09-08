@@ -16,6 +16,10 @@ NimBLECharacteristic* g_gpsMain = nullptr;
 NimBLECharacteristic* g_gpsTime = nullptr;
 bool g_connected = false;
 uint16_t g_mtu = 23;
+// The live connection, so end() can drop the peer politely instead of letting
+// it time out. Only one is ever allowed (CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1).
+uint16_t g_connHandle = 0;
+bool g_hasConn = false;
 
 // Set by the callbacks, drained by tick(). The callbacks run on the NimBLE
 // host task, and logging there puts a USB CDC write -- which can drop or
@@ -34,6 +38,8 @@ uint16_t g_logMtu = 0;
 class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer* server, ble_gap_conn_desc* desc) override {
     g_connected = true;
+    g_connHandle = desc->conn_handle;
+    g_hasConn = true;
     // 12 and 24 are 15 ms and 30 ms. These are the floor Apple's Accessory
     // Design Guidelines allow -- interval min >= 15 ms, and interval max at
     // least 15 ms above it -- and Android rejects out-of-range requests too.
@@ -46,6 +52,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
 
   void onDisconnect(NimBLEServer* server) override {
     g_connected = false;
+    g_hasConn = false;
     g_mtu = 23;
     g_logDisconnected = true;
     // No startAdvertising() here: NimBLEServer::m_advertiseOnDisconnect
@@ -80,6 +87,21 @@ FilterCallbacks g_filterCallbacks;
 
 bool BleLink::begin(const char* deviceName, TelemetryRing& ring) {
   ring_ = &ring;
+
+  if (NimBLEDevice::getInitialized()) {
+    // end() leaves the stack running on purpose, so the service and its
+    // characteristics are still there from the first begin(). Only the name
+    // and the advertising need to come back.
+    NimBLEDevice::setDeviceName(deviceName);
+    NimBLEAdvertising* advertising = NimBLEDevice::getAdvertising();
+    advertising->setName(deviceName);
+    if (!advertising->start()) {
+      Log::error("ble", "advertising failed to restart");
+      return false;
+    }
+    Log::info("ble", "advertising as %s", deviceName);
+    return true;
+  }
 
   NimBLEDevice::init(deviceName);
   // No setMTU and no 2M PHY. Both were sized for a 30 kB/s target that died
@@ -138,11 +160,21 @@ bool BleLink::begin(const char* deviceName, TelemetryRing& ring) {
 }
 
 void BleLink::end() {
+  // Deliberately NOT NimBLEDevice::deinit(). Tearing the stack down while its
+  // own host task is running it crashes with PC=0 inside nimble_port_run()
+  // (NimBLEDevice.cpp:837) -- observed on a mode switch, and again on sleep.
+  // The reference implementation never deinitialises either; that was our
+  // invention and it has had two ways to bite.
+  //
+  // Going quiet is all a mode switch or a sleep actually needs: advertising
+  // stops and the peer is dropped, so the radio is silent and the front end is
+  // free for WiFi. The stack stays up, and begin() knows how to find it.
   NimBLEDevice::stopAdvertising();
-  NimBLEDevice::deinit(true);
-  g_server = nullptr;
-  g_gpsMain = nullptr;
-  g_gpsTime = nullptr;
+  if (g_hasConn && g_server != nullptr) {
+    // Tell the peer rather than leaving it to notice a supervision timeout.
+    g_server->disconnect(g_connHandle);
+    g_hasConn = false;
+  }
   g_connected = false;
   g_mtu = 23;
   connected_ = false;
