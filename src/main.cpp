@@ -324,6 +324,12 @@ void updateRate(uint32_t nowMs) {
 void setup() {
   Log::begin(115200);
   Log::info("boot", "teletrack on %s", BoardConfig::kBoardName);
+  // Says outright whether this boot is a wake. Without it a board that wakes
+  // and then hangs looks exactly like one that never woke at all, and the two
+  // need completely different investigations.
+  if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0) {
+    Log::info("boot", "woke from sleep on the mode button");
+  }
 
   // Before the display: on the T-Beam the panel sits on a rail this switches.
   if (!app.pmu.begin()) {

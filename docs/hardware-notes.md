@@ -227,17 +227,26 @@ The wake pad's pull is also configured explicitly with `rtc_gpio_pullup_en()`.
 Enabling the wake source does not do it, and the digital-domain pull is gone in
 deep sleep, so the pin could otherwise float.
 
-### Rails switched off for sleep do not come back
+### Rails switched off for sleep must be switched back on at boot
 
-`Pmu::prepareForSleep()` disables ALDO1, ALDO2, BLDO1, BLDO2 and DC3-5. Deep
-sleep does not power-cycle the AXP2101, and `Pmu::begin()` does not re-enable
-them, so **after the first sleep they stay off across every subsequent boot**
-until the battery or USB is physically pulled.
+Deep sleep does not power-cycle the AXP2101, so anything `prepareForSleep()`
+disables is **still disabled when the board wakes** — a wake re-enters
+`Pmu::begin()` with the rails down.
 
-That is harmless today because nothing uses them. It is a trap for whoever adds
-SD-card logging or reads the sensors: the peripheral will be dead on any board
-that has slept once, and nothing in the log will say why. Re-enable what you
-need in `Pmu::begin()` rather than assuming the rail is up.
+This was not theoretical. The first sleep worked, the board woke, the USB
+peripheral re-enumerated, and then it hung with a dark screen and no serial
+output at all: **the display's supply was among the rails that never came
+back**, and `u8g2`'s init blocks forever on an I2C device that is not there.
+That is the same symptom as the 0x3C address collision from the T-Beam phase,
+and just as hard to read from the outside.
+
+`Pmu::begin()` now enables ALDO1, ALDO2, BLDO1 and BLDO2 explicitly rather than
+relying on the AXP2101's power-up state, which only applies to a real power-on.
+
+**DC3, DC4 and DC5 are no longer touched at all.** The vendor calls them the M.2
+interface and nothing here knows what else hangs off them. The saving was never
+measured and is not worth guessing about on a board that has already failed to
+come back once.
 
 ### LoRa is off from boot
 

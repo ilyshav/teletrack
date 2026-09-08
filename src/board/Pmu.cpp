@@ -38,6 +38,21 @@ bool Pmu::begin() {
   // enabled before this function ever ran -- so the radio has been powered
   // since the board was first flashed. Off, on every boot, not just in sleep.
   g_pmu.disableALDO3();
+
+  // Everything else the board powers up with, restored explicitly. This is not
+  // redundant: prepareForSleep() switches these off, deep sleep does not
+  // power-cycle the PMU, and a wake re-enters begin() with them still down. The
+  // display's supply is among them -- a wake with them left off hung the board
+  // in u8g2's init with a dark screen and no serial output, which is the same
+  // failure the I2C address bug produced in phase 3 and just as hard to read.
+  g_pmu.setALDO1Voltage(3300);
+  g_pmu.enableALDO1();
+  g_pmu.setALDO2Voltage(3300);
+  g_pmu.enableALDO2();
+  g_pmu.setBLDO1Voltage(3300);
+  g_pmu.enableBLDO1();
+  g_pmu.setBLDO2Voltage(3300);
+  g_pmu.enableBLDO2();
   // Charges the AXP2101's backup cell. On T-Beam variants where that rail
   // feeds the GNSS receiver's V_BCKP it holds the almanac and ephemeris across
   // a power cycle, turning a cold start into a warm or hot one.
@@ -129,9 +144,10 @@ void Pmu::prepareForSleep() {
   g_pmu.disableALDO2();  // SD card
   g_pmu.disableBLDO1();
   g_pmu.disableBLDO2();
-  g_pmu.disableDC3();  // M.2 interface
-  g_pmu.disableDC4();
-  g_pmu.disableDC5();
+  // DC3, DC4 and DC5 are left alone. The vendor calls them the M.2 interface
+  // and nothing here knows what else hangs off them; switching them off saved
+  // an unmeasured amount and is not worth guessing about on a board that has
+  // already failed to come back once.
   Log::info("sleep", "rails down, GPS rail held");
 }
 
