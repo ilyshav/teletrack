@@ -314,14 +314,23 @@ void loop() {
     startCurrentMode();
   }
 
-  if (app.button.tick(now)) {
-    const RadioMode leaving = app.modes.mode();
-    if (app.modes.handle(ModeEvent::ButtonHeld)) {
-      Log::info("mode", "switching");
-      // Down before up: both radios share one front end.
-      stopCurrentMode(leaving);
-      startCurrentMode();
+  switch (app.button.tick(now)) {
+    case ButtonEvent::Hold: {
+      const RadioMode leaving = app.modes.mode();
+      if (app.modes.handle(ModeEvent::ButtonHeld)) {
+        Log::info("mode", "switching");
+        // Down before up: both radios share one front end.
+        stopCurrentMode(leaving);
+        startCurrentMode();
+      }
+      break;
     }
+    case ButtonEvent::TripleClick:
+      // Task 4 turns this into an actual sleep.
+      Log::info("sleep", "requested");
+      break;
+    case ButtonEvent::None:
+      break;
   }
 
   // Drained in both modes: the status screen shows satellites while the

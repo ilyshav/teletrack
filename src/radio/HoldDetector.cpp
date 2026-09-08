@@ -1,16 +1,16 @@
 #include "radio/HoldDetector.h"
 
-bool HoldDetector::update(bool pressed, uint32_t nowMs) {
+ButtonEvent HoldDetector::update(bool pressed, uint32_t nowMs) {
   if (pressed) {
     if (!pressed_) {
-      // Check if this is a bounce (contact restored within debounce window)
       if (releasing_ && (nowMs - releaseStartMs_) < kDebounceMs) {
-        // Bounce: contact came back within the debounce window.
-        // The hold never broke, so don't restart the timer.
+        // Bounce: contact came back inside the debounce window, so the press
+        // never really ended. Do not restart the timer, and do not let it
+        // count as a click -- three chattering contacts must not read as a
+        // deliberate triple click.
         pressed_ = true;
         releasing_ = false;
       } else {
-        // New press: first contact or genuine new press after real release.
         pressed_ = true;
         fired_ = false;
         pressStartMs_ = nowMs;
@@ -20,23 +20,47 @@ bool HoldDetector::update(bool pressed, uint32_t nowMs) {
 
     if (!fired_ && (nowMs - pressStartMs_) >= kHoldMs) {
       fired_ = true;
-      return true;
+      // A hold ends any click sequence in progress: the two gestures are
+      // alternatives, not stages of one another.
+      clicks_ = 0;
+      return ButtonEvent::Hold;
     }
-    return false;
+    return ButtonEvent::None;
   }
 
   // Not pressed.
   if (pressed_) {
-    // Immediately mark as released, but track timing to detect bounces.
     pressed_ = false;
     releasing_ = true;
     releaseStartMs_ = nowMs;
-  } else if (releasing_ && (nowMs - releaseStartMs_) >= kDebounceMs) {
-    // Released for longer than bounce: clear the release tracking.
+    lastPressMs_ = nowMs - pressStartMs_;
+    return ButtonEvent::None;
+  }
+
+  if (releasing_ && (nowMs - releaseStartMs_) >= kDebounceMs) {
+    // The release outlasted the debounce window, so it was real and the press
+    // it ended can finally be classified.
     releasing_ = false;
     fired_ = false;
+
+    if (lastPressMs_ >= kClickMaxMs) {
+      clicks_ = 0;  // that was a hold, not a click
+      return ButtonEvent::None;
+    }
+
+    if (clicks_ == 0 || (nowMs - firstClickMs_) > kMultiClickWindowMs) {
+      clicks_ = 1;
+      firstClickMs_ = nowMs;
+    } else {
+      ++clicks_;
+    }
+
+    if (clicks_ >= kClicksForSleep) {
+      clicks_ = 0;
+      return ButtonEvent::TripleClick;
+    }
   }
-  return false;
+  return ButtonEvent::None;
 }
 
 uint32_t HoldDetector::heldMs(uint32_t nowMs) const {

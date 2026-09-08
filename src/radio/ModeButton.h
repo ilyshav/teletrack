@@ -19,8 +19,8 @@ class ModeButton {
 
   void begin();
 
-  // Call from loop(). True exactly once per completed 3-second hold.
-  bool tick(uint32_t nowMs);
+  // Call from loop(). Reports what the button did on this sample.
+  ButtonEvent tick(uint32_t nowMs);
 
   uint32_t heldMs(uint32_t nowMs) const { return detector_.heldMs(nowMs); }
 
