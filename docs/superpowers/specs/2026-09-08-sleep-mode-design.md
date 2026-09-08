@@ -21,10 +21,10 @@ T-Beam Supreme only. The ESP32-S3-DevKitC-1 has no PMU and no power button.
 - **Sleeping the GPS while the rest runs.** That is a power optimisation for the
   running state, not a sleep mode.
 
-## 2. There is only one user button, and it is taken
+## 2. One button, two gestures
 
 `features.md` asks for "another button, not mode switcher". LilyGO's board support
-for this board declares exactly one:
+declares exactly one user button:
 
 ```
 #define BUTTON_PIN   (0)
@@ -32,160 +32,189 @@ for this board declares exactly one:
 #define PMU_IRQ      (40)
 ```
 
-GPIO0 is already the mode switch. The other button on the board is the **power
-key, wired to the AXP2101**, which reports short and long presses as interrupts on
-GPIO 40. That is the second button, and long-press-off / short-press-on is what
-the key exists for.
+The other button on the board is the power key, wired to the AXP2101 and reported
+over I2C on GPIO 40. It works fine as a *sleep* trigger — but it cannot **wake** the
+chip, and that decides the design.
 
-## 3. Power down, not deep sleep
+### Why the power key cannot wake it
 
-**`AXP2101::shutdown()` cuts every rail; only VRTC stays up.** Draw falls to the
-PMU's quiescent current — tens of microamps, weeks on an 18650.
+Keeping the GPS's backup RAM alive means the PMU must stay powered, which means the
+ESP32 must sleep rather than be switched off. Waking from deep sleep needs an RTC
+GPIO, and on the ESP32-S3 those stop at GPIO21 — `SOC_RTCIO_PIN_COUNT` is 22 and the
+last channel defined is `RTCIO_GPIO21_CHANNEL`. The PMU's interrupt line is GPIO 40.
 
-ESP32-S3 deep sleep is the obvious alternative and it is worse here. The MCU's RTC
-domain draws about 10 µA, but the AXP2101 stays fully powered with DCDC1 up, so the
-board keeps drawing the PMU's own current plus every rail not explicitly disabled.
+So the only button that can wake this board is **GPIO0, the mode button**, and both
+gestures live there.
 
-**And deep sleep buys nothing back, because it does not resume either.** ESP32 deep
-sleep restarts execution from `setup()`, exactly as a power-on does. Neither
-mechanism preserves the running state, so the only real difference between them is
-current, and shutdown wins outright.
+## 3. Sleep and wake, both on the mode button
 
-### Expect a cold start on wake, and measure it
+The button already fires a radio switch at three seconds. A longer hold for sleep
+would therefore always switch the radio on its way past, so the action is decided
+**on release**, by how long the button was held:
 
-`shutdown()` documents itself as turning off all power channels, with **only VRTC**
-staying up — and VRTC is the PMU's own RTC, not the backup rail. The receiver loses
-power completely.
-
-A u-blox M10 keeps its almanac, ephemeris, time and last position in battery-backed
-RAM held up by its `V_BCKP` pin. What that pin is connected to on this board decides
-everything:
-
-| Fed by | Result on wake |
+| Held for | On release |
 | --- | --- |
-| a supercap or coin cell on the board | hot or warm start, seconds to a fix |
-| a PMU rail that `shutdown()` cuts | cold start, tens of seconds to minutes |
+| under 3 s | nothing |
+| 3 s to 6 s | switch radio, exactly as today |
+| over 6 s | sleep |
 
-**We do not know which this board is.** Phase 4 enabled the AXP2101's backup-cell
-charger with a comment claiming it keeps the almanac alive; that claim came from the
-general role of that rail, not from evidence about this board. LilyGO's own support
-for the S3 Supreme never enables `XPOWERS_VBACKUP` at all — every reference to it is
-in other board branches — and the comment has been corrected to say so.
-
-So the design assumes a **cold start** and does not depend on anything better.
-
-**The measurement that settles it** is in §7: sleep, wake, and time the first fix.
-Under about ten seconds means the backup domain survived; thirty seconds or more
-means it did not. Either way the answer belongs in `docs/hardware-notes.md`, because
-it is a fact about the board that nothing in software can tell us.
-
-If it turns out to be a cold start and that is too slow between sessions, the option
-is to leave the GPS rail powered while sleeping — but that costs milliamps, not
-microamps, and would defeat the phase. That would be a different design, not a tweak.
-
-## 4. The sequence
+The header shows what is armed while the button is down, so the gesture is visible
+before it commits:
 
 ```
-src/board/Pmu.h/.cpp    enableSleepButton(), sleepRequested(), sleep()
-src/main.cpp            acts on the request in loop()
+|87%+ 4.05V    HOLD 3s|   counting toward the radio switch
+|87%+ 4.05V       MODE|   release now and the radio switches
+|87%+ 4.05V      SLEEP|   release now and it sleeps
 ```
 
-`Pmu::begin()` additionally:
+### This changes `HoldDetector`, and that is the point
 
-- `enableIRQ(XPOWERS_AXP2101_PKEY_LONG_IRQ | XPOWERS_AXP2101_PKEY_SHORT_IRQ)`
-- `setPowerKeyPressOffTime(XPOWERS_POWEROFF_10S)` — the hardware backstop
-- `setPowerKeyPressOnTime(XPOWERS_POWERON_512MS)` — a deliberate press to wake, not
-  a knock
+`HoldDetector::update()` currently returns `true` once, at the instant the hold
+reaches `kHoldMs`. It becomes a small enum returned on release —
+`HoldAction::None`, `HoldAction::SwitchMode`, `HoldAction::Sleep`.
 
-`Pmu::tick()` already runs at 1 Hz for the battery. It also reads the IRQ status and
-latches `sleepRequested_` when the long-press bit is set, then clears the IRQ.
+`HoldDetector` is a pure module with existing host tests, so unlike the rest of this
+phase this part is genuinely testable: the thresholds, the release semantics, the
+debounce interaction, and the boundaries at exactly 3 s and 6 s all get assertions.
+Its existing tests change shape because the contract changed; that is expected and
+they must be rewritten rather than deleted.
 
-**Polling at 1 Hz is enough and the GPIO 40 interrupt line is not used.** The button
-is held for over a second by definition; a second of latency before the screen says
-anything is acceptable, and an ISR that touches I2C is not.
+## 4. What sleep actually does
 
-`loop()` acts on the request:
+```
+src/board/Pmu.h/.cpp    Pmu::prepareForSleep()
+src/main.cpp            drives the sequence
+```
 
-1. Log `sleep: powering down`.
-2. Stop the active radio — the same `stopCurrentMode()` a mode switch uses, so BLE
-   or the AP comes down cleanly rather than being cut mid-connection.
-3. Draw `SLEEPING` on the display and hold it briefly, so the button press is
-   visibly acknowledged before everything goes dark.
-4. `Pmu::sleep()` → `g_pmu.shutdown()`.
+1. Log `sleep: going down`.
+2. Stop the active radio through the existing `stopCurrentMode()`, so BLE or the AP
+   comes down cleanly rather than being cut mid-connection.
+3. Draw `SLEEPING` and hold it briefly, then blank the panel with U8g2's
+   `setPowerSave(1)`.
+4. `Pmu::prepareForSleep()` disables ALDO1, ALDO2, ALDO3, ALDO4, BLDO1, BLDO2,
+   DCDC3, DCDC4 and DCDC5 — the sensors, SD card, LoRa, GPS main and the M.2
+   interface — and **leaves the backup rail enabled**.
+5. `esp_sleep_enable_ext0_wakeup((gpio_num_t)0, 0)` — wake on GPIO0 going low.
+6. `esp_deep_sleep_start()`.
 
-### The hardware backstop stays armed
+### What stays powered, and why
 
-`enableLongPressShutdown()` with `setLongPressPowerOFF()` is left on. The long-press
-**interrupt** fires well before the 10 s **off-timer**, so firmware always wins the
-race and does the orderly shutdown — but if it ever hangs, holding the button for
-ten seconds still kills the board. A device that cannot be switched off without
-pulling the cell is worse than one with an untidy shutdown path.
+**The backup rail.** This is the whole reason for sleeping rather than shutting
+down. The receiver keeps its almanac, ephemeris and time, so the first fix after a
+wake takes seconds instead of tens of seconds. On this board that routing is
+**unverified** — see §6.
+
+**DCDC1**, the ESP32's own supply, which the vendor marks protected. The chip is in
+deep sleep at roughly 10 µA rather than unpowered.
+
+**The charger.** The PMU stays up, so a board left on USB keeps charging while it
+sleeps. That is the right behaviour and needs no code — it is simply what does not
+get disabled.
+
+Estimated total draw is around 150 µA, which is over two years on a 3000 mAh cell.
+The figure is an estimate from datasheet quiescent currents and has not been
+measured on this board.
 
 ## 5. Waking
 
-Nothing to implement. A short press re-powers the rails in hardware and the ESP32
-boots normally. Because no firmware is involved, waking cannot fail the way sleeping
-could.
+`esp_deep_sleep_start()` does not return. A wake restarts execution from `setup()`,
+exactly like a power-on, so there is no state to save or restore and no resume path
+to design. The radio comes up in `kBootMode` as it always does.
 
-Plugging in USB also powers the board on — VBUS insertion turns the PMU on. That is
-the chip's behaviour and it is the right one: a device on a charger should be awake.
+**GPIO0 is a strapping pin, and waking on it is safe.** Held low at a *power-on*
+reset the chip enters download mode, which is how the board is flashed. A deep-sleep
+wake is not a power-on reset: the ROM takes its fast path through the wake stub and
+never re-evaluates the boot-mode strapping. Holding the button to wake cannot drop
+the board into download mode.
 
-## 6. Sleeping while plugged into USB
+A short press does nothing while awake — only a three-second hold does anything — so
+"short press wakes it" collides with no existing gesture.
 
-`shutdown()` with VBUS present is likely to power straight back on, because the
-AXP2101 treats VBUS insertion as a power-on event. Rather than pretend otherwise,
-the request is **refused** when USB is present, and the log says why:
+## 6. The GPS backup rail is unverified on this board
 
-```
-sleep: ignored, USB is connected
-```
+`Pmu::begin()` enables the AXP2101's backup-cell charger, and a comment there used
+to claim it keeps the GNSS almanac alive. That claim came from the general role of
+that rail, not from evidence about this board, and it has been corrected.
 
-`DeviceStatus::batteryUsbPresent` already carries what that test needs, from Phase 4.
+LilyGO's own support for the S3 Supreme never enables `XPOWERS_VBACKUP` — every
+reference to it is in other board branches, one of them noting the rail costs about
+100 µA. Whether it reaches this receiver's `V_BCKP` pin is a layout question that no
+amount of reading the software will answer.
+
+Two things settle it, both cheap:
+
+- **`getButtonBatteryVoltage()` in the boot log.** If that rail reads nothing, there
+  is nothing on it and the premise is wrong.
+- **Time the first fix after a wake.** Under about ten seconds means the backup
+  domain survived; thirty or more means it did not.
+
+If it turns out the rail does not reach the receiver, sleep still works and still
+saves the battery — it just wakes to a cold start, and the design should then be
+simplified back to `shutdown()`, which is both simpler and lower.
 
 ## 7. Testing
 
-**No new host tests.** This is I2C register access, a latch, and a call into the PMU
-that turns the board off — the same reason `Pmu`, `GpsReceiver` and the displays have
-none. A test here would assert that a bool can be set.
+**`HoldDetector` gets real host tests** — it is pure, it already has them, and its
+contract is changing:
+
+- A release under 3 s yields `None`.
+- A release between 3 s and 6 s yields `SwitchMode`.
+- A release after more than 6 s yields `Sleep`.
+- Exactly 3000 ms and exactly 6000 ms fall on the documented side of each boundary.
+- Nothing fires while the button is still down, however long it is held.
+- A bounce inside the debounce window does not restart the timer or change which
+  action is armed.
+- `heldMs()` keeps counting past both thresholds, which is what the header reads to
+  decide between `HOLD`, `MODE` and `SLEEP`.
+
+**No host tests for the rest.** Disabling rails, `esp_deep_sleep_start()` and the
+U8g2 blank are I/O with no logic, the same reason `Pmu`, `GpsReceiver` and the
+displays have none.
 
 The gate is:
 
 - `pio run -e esp` and `pio run -e tbeam` both build.
-- `pio test -e native` still reports 118.
+- `pio test -e native` passes, with the rewritten `HoldDetector` tests.
 - `Pmu.cpp` stays out of `[env:native]`'s `build_src_filter`.
 
-**On hardware:** a long press logs, shows `SLEEPING`, and the board goes dark; a
-short press brings it back; the mode button is unaffected; a long press on USB is
-refused; and the GPS reaches a fix quickly after waking rather than cold-starting.
+**On hardware:** a 3-second hold still switches radio exactly as before; a 6-second
+hold sleeps; the panel goes dark; a press wakes it; the board does not enter
+download mode on wake; charging continues while asleep; and the boot log reports the
+backup-rail voltage.
 
-**Worth measuring once:** the current draw while off. The design claims tens of
-microamps and that number has never been checked on this board.
+**Worth measuring once:** sleep current, and time to first fix after a wake. Both
+claims in this document are estimates.
 
 ## 8. Success criteria
 
-- [ ] Long press on the power key powers the board down, after stopping the radio
-      and showing `SLEEPING`.
-- [ ] Short press brings it back, with no firmware involvement in the wake.
-- [ ] A long press while USB is connected is refused and logged.
-- [ ] The hardware 10 s off-timer still works if firmware is wedged.
-- [ ] The mode button on GPIO0 behaves exactly as before.
-- [ ] Time to first fix after a wake is measured and written into
-      `docs/hardware-notes.md`, whichever way it comes out.
-- [ ] DevKitC builds and behaves exactly as before; 118 host tests still pass.
+- [ ] A release between 3 s and 6 s switches radio, exactly as before this phase.
+- [ ] A release after 6 s sleeps: radio stopped, panel dark, rails down.
+- [ ] The header shows `HOLD`, then `MODE`, then `SLEEP` as the hold passes each
+      threshold, so the gesture is visible before it commits.
+- [ ] A press wakes the board, and it does not enter download mode.
+- [ ] The backup rail is still enabled while asleep.
+- [ ] Charging continues while asleep on USB.
+- [ ] The boot log reports the backup-rail voltage.
+- [ ] Sleep current and time-to-first-fix after a wake are measured once and written
+      into `docs/hardware-notes.md`.
+- [ ] DevKitC builds and behaves exactly as before; host tests pass.
 
 ## 9. Risks
 
-**The 1 Hz poll adds up to a second of latency** between releasing the button and
-the screen changing. Acceptable for a shutdown, and the alternative — an interrupt
-handler that talks to an I2C device — is worse.
+**The one-button design has two gestures three seconds apart.** Six seconds is a
+long time to hold something, and the only thing making it discoverable is the header
+changing from `MODE` to `SLEEP`. If that feedback does not read clearly on hardware,
+the thresholds are the thing to adjust, not the mechanism.
 
-**`XPOWERS_AXP2101_PKEY_LONG_IRQ` fires at a threshold set by the chip, not by us.**
-It is well under the 4 s minimum off-time, so firmware wins the race, but the exact
-value is from the datasheet rather than measured here. If the board ever cuts power
-before `SLEEPING` appears, the hardware timer won and the two are closer than
-assumed.
+**Fire-on-release changes a working feature.** Radio switching currently happens at
+the instant the hold reaches three seconds; it will now happen when the button comes
+back up. That is a real change in feel and it is deliberate — it is the only way two
+gestures can share one button without the shorter one always winning.
 
-**Nothing verifies the board actually stays off.** If `shutdown()` does not hold on
-this hardware — a rail that re-triggers power-on, for instance — the symptom is a
-boot loop on sleeping rather than a quiet board, and the fix is the sequence, not
-the trigger.
+**The 150 µA estimate is unmeasured**, and so is everything about the backup rail.
+If the rail turns out not to reach the receiver, the correct response is to simplify
+back to `shutdown()` rather than keep a more complex sleep that buys nothing.
+
+**Nothing verifies the board actually stays asleep.** If a rail we disable feeds
+something that pulls GPIO0, the board would wake immediately and the symptom is a
+sleep that does not stick.
