@@ -9,9 +9,11 @@
 #include "ble/TelemetryRing.h"
 #include "board/BoardConfig.h"
 #include "board/Pmu.h"
+#include "can/BusStatus.h"
 #include "can/CanBus.h"
 #include "can/CanFilter.h"
 #include "can/CanFrame.h"
+#include "can/CanStats.h"
 #include "config/ConfigPortal.h"
 #include "config/Settings.h"
 #include "core/DeviceStatus.h"
@@ -74,6 +76,14 @@ struct App {
   GpsReceiver gpsRx;
   CanBus can;
   CanFilter canFilter;
+  CanStats canStats;
+  // Which page the display is on. Moved by a triple click on the mode button.
+  Screen screen = Screen::Gps;
+  // The boot-time pin test, kept because it cannot be repeated: the TWAI driver
+  // owns the pin from begin() onwards.
+  bool canTransceiver = false;
+  // Read once per published window rather than per pass -- see pumpCanBus().
+  CanBus::Diagnostics canDiag;
   ModeButton button;
   ModeController modes;
   Pmu pmu;
@@ -271,12 +281,33 @@ void pumpCanBus(uint32_t nowMs) {
   // Bounded so a busy bus cannot monopolise a pass of loop().
   CanFrame frame;
   for (int i = 0; i < 32 && app.can.read(frame); ++i) {
+    // Counted before the filter, not after: the CAN screen answers "what is on
+    // this bus", which is not the same question as "what did RaceChrono ask
+    // for", and a filter that matches nothing must still show a live bus.
+    app.canStats.recordFrame(frame.id);
     if (!app.ble.connected() || !app.canFilter.shouldNotify(frame.id, nowMs)) {
       continue;
     }
     uint8_t packet[CanFrame::kMaxPacketBytes];
     const size_t len = encodeCanPacket(frame, packet);
     app.ble.publishCan(packet, len);
+  }
+
+  // Frames the controller dropped before the reader ever saw them. Polled at
+  // 10 Hz rather than every pass: takeLost() locks inside the TWAI driver, and
+  // a frame lost at the very end of a window is just as well counted in the one
+  // that publishes a moment later.
+  static uint32_t lastLostPollMs = 0;
+  if (nowMs - lastLostPollMs >= 100) {
+    lastLostPollMs = nowMs;
+    app.canStats.recordLost(app.can.takeLost());
+  }
+
+  if (app.canStats.tick(nowMs)) {
+    // Read here rather than in buildStatus(), which runs on every pass of
+    // loop() at roughly 1 kHz. twai_get_status_info() locks inside the driver,
+    // and once per published window is the cadence the screen shows anyway.
+    app.canDiag = app.can.diagnostics();
   }
 }
 
@@ -291,6 +322,19 @@ DeviceStatus buildStatus(uint32_t nowMs) {
   s.gpsPresent = app.gpsRx.present();
   s.gpsTimeValid = app.gpsRx.timeValid();
   s.gpsFix = app.gpsRx.fix();
+
+  const CanSnapshot& can = app.canStats.snapshot();
+  s.screen = app.screen;
+  s.canPresent = app.can.present();
+  s.canTransceiver = app.canTransceiver;
+  s.canHealth = busStatus(app.can.present(), can.framesPerSec, can.lostPerSec);
+  s.canState = app.canDiag.state;
+  s.canFramesPerSec = can.framesPerSec;
+  s.canLostPerSec = can.lostPerSec;
+  s.canRxErrors = app.canDiag.rxErrors;
+  s.canBusErrors = app.canDiag.busErrors;
+  s.canIdsSeen = can.idsSeen;
+  s.canExtendedFrames = can.extendedFrames;
   return s;
 }
 
@@ -335,6 +379,14 @@ void setup() {
   // answered, and BLE carries on without it.
   app.gpsRx.begin(app.settings.sampleHz);
 
+  // Before begin(), which hands the pin to the TWAI driver. This is the only
+  // measurement that tells a quiet bus from a swapped RX/TX, and it can never
+  // be taken again once the driver owns the pad.
+  app.canTransceiver = CanBus::transceiverPresent();
+  Log::info("can", "transceiver on RX: %s",
+            app.canTransceiver ? "driving the pin"
+                               : "NOT DRIVING -- check power and RX/TX");
+
   // A bus that is not there must not stop anything else: begin() reports and
   // returns, and read() then yields nothing for the rest of the run.
   app.can.begin();
@@ -371,9 +423,8 @@ void loop() {
       break;
     }
     case ButtonEvent::TripleClick:
-      // Carries the screen switch next. Sleep is gone: with no cell fitted,
-      // "asleep" and "unplugged" are the same state, and an unplugged board
-      // retains nothing worth preserving a rail for.
+      app.screen = app.screen == Screen::Gps ? Screen::Can : Screen::Gps;
+      Log::info("ui", "screen: %s", app.screen == Screen::Gps ? "GPS" : "CAN");
       break;
     case ButtonEvent::None:
       break;
