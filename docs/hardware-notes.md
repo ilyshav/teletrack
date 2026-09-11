@@ -255,6 +255,61 @@ ALDO3=1 ALDO4=1 BLDO1=1 BLDO2=1` before the firmware touches anything — so ALD
 had been powering a LoRa radio this project never uses since the board was first
 flashed.
 
+## CAN bus
+
+Passive reading of the car's bus, forwarded to RaceChrono. A Waveshare
+SN65HVD230 module (chip marked `VP230`) on the T-Beam:
+
+```
+module 3.3V   -> 3V3        module CAN RX -> GPIO 16
+module GND    -> GND        module CAN TX -> GPIO 15
+module CANH   -> OBD-II pin 6
+module CANL   -> OBD-II pin 14
+```
+
+**Not GPIO 17 or 18** — those are this board's I2C bus, and the OLED is on them.
+
+**Listen-only, always.** `TWAI_MODE_LISTEN_ONLY` means the controller never
+transmits and never acknowledges. In any other mode a CAN controller acks every
+frame it receives — it actively drives the bus — and on a car's live powertrain
+network that turns a firmware bug into a vehicle behaviour bug.
+
+**The module's 120 Ω terminator must be removed** — the SMD resistor marked
+`121`, between the transceiver and the CANH/CANL headers. A bus is terminated at
+both ends and the car has both; a third makes 40 Ω where the transceivers expect
+60. Leave the pads **open**: the resistor sits across the pair, not in line with
+it, and bridging shorts the bus.
+
+**If no frames arrive, swap RX and TX first.** These modules are inconsistent
+about whose perspective the labels take, and in listen-only mode a swap gives
+silence, which is indistinguishable from a quiet bus.
+
+### Byte order
+
+Three, in one firmware:
+
+| Where | Order |
+| --- | --- |
+| CAN id on characteristic 0x0001 | **little**-endian |
+| Filter commands on 0x0002 | big-endian |
+| Every GPS field | big-endian |
+
+RaceChrono's spec calls the first one out explicitly — *"unlike other values in
+this API"*. Getting it wrong yields ids that look plausible and match nothing.
+
+### Mazda MX-5 ND
+
+Main bus on OBD-II pins 6 and 14 at 500 kbps. Community-decoded ids:
+
+| Id | Carries |
+| --- | --- |
+| `0x202` | accelerator position, speed, engine RPM |
+| `0x78` | brake position |
+| `0x86` | steering angle |
+
+Fuel level, coolant temperature, clutch and gear are **not** known. Source:
+`timurrrr/RaceChronoDiyBleDevice`, `can_db/mazda_mx5_nd.md`.
+
 ## Serial
 
 ### Reading the port yourself returns zero bytes
@@ -430,6 +485,25 @@ characteristics that are still there rather than building them again.
 
 The reference implementation never deinitialises either. Calling it was our
 invention, and it had two separate ways to crash the board.
+
+### The BLE host task is on core 0, loop() is on core 1
+
+NimBLE pins its host task with `CONFIG_BT_NIMBLE_PINNED_TO_CORE`, which is 0,
+while Arduino's `loop()` runs on `ARDUINO_RUNNING_CORE`, which is 1. Anything
+shared between a BLE callback and `loop()` therefore crosses cores.
+
+`volatile` is not enough for that. It constrains how the compiler treats one
+object and promises nothing about the order two cores observe two different
+writes. The CAN filter queue publishes a payload and then an index; without
+release/acquire the consumer can see the new index and read a slot that is not
+written yet -- applying a wrong id or interval rather than dropping a command,
+which is the failure nothing counts.
+
+The queue uses `std::atomic<uint8_t>` with a release store on the producer's
+index and an acquire load on the consumer's. Two other things already live on
+this boundary and are safe for a different reason: the log flags are single
+booleans where a stale read costs one frame of latency, and the connection state
+is a single bool.
 
 ### NimBLE version
 

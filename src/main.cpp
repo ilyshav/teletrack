@@ -11,6 +11,9 @@
 #include "ble/TelemetryRing.h"
 #include "board/BoardConfig.h"
 #include "board/Pmu.h"
+#include "can/CanBus.h"
+#include "can/CanFilter.h"
+#include "can/CanFrame.h"
 #include "config/ConfigPortal.h"
 #include "config/Settings.h"
 #include "core/DeviceStatus.h"
@@ -71,6 +74,8 @@ struct App {
   BleLink ble;
   RaceChronoGps gps;
   GpsReceiver gpsRx;
+  CanBus can;
+  CanFilter canFilter;
   ModeButton button;
   ModeController modes;
   Pmu pmu;
@@ -287,6 +292,54 @@ void produceSample(uint32_t nowMs, bool newFix) {
 
 #endif
 
+// Frames go straight out or are dropped, never stored. A ring of stale
+// telemetry has already broken this project once: it filled while nothing was
+// connected and then flooded a minute of history at RaceChrono the moment it
+// appeared. A CAN frame is worth even less once it is old.
+void pumpCanBus(uint32_t nowMs) {
+  uint8_t command[8];
+  size_t commandLen = 0;
+  while (app.ble.takeFilterCommand(command, commandLen)) {
+    if (app.canFilter.applyCommand(command, commandLen)) {
+      Log::info("can", "filter command %u applied, %u ids",
+                static_cast<unsigned>(command[0]),
+                static_cast<unsigned>(app.canFilter.trackedIds()));
+    } else {
+      Log::warn("can", "filter command %u rejected, %u bytes",
+                static_cast<unsigned>(command[0]),
+                static_cast<unsigned>(commandLen));
+    }
+  }
+
+  // Both counters exist so a loss is noticed rather than guessed at, which
+  // only works if something reads them. Reported on change, not every pass.
+  static uint32_t reportedOverflows = 0;
+  static uint32_t reportedDropped = 0;
+  const uint32_t overflows = app.ble.filterOverflows();
+  if (overflows != reportedOverflows) {
+    reportedOverflows = overflows;
+    Log::warn("can", "%lu filter commands dropped, queue full",
+              static_cast<unsigned long>(overflows));
+  }
+  const uint32_t dropped = app.canFilter.droppedUnknown();
+  if (dropped != reportedDropped) {
+    reportedDropped = dropped;
+    Log::warn("can", "%lu ids seen after the table filled",
+              static_cast<unsigned long>(dropped));
+  }
+
+  // Bounded so a busy bus cannot monopolise a pass of loop().
+  CanFrame frame;
+  for (int i = 0; i < 32 && app.can.read(frame); ++i) {
+    if (!app.ble.connected() || !app.canFilter.shouldNotify(frame.id, nowMs)) {
+      continue;
+    }
+    uint8_t packet[CanFrame::kMaxPacketBytes];
+    const size_t len = encodeCanPacket(frame, packet);
+    app.ble.publishCan(packet, len);
+  }
+}
+
 DeviceStatus buildStatus(uint32_t nowMs) {
   DeviceStatus s = app.portal.status();
   s.mode = app.modes.mode();
@@ -357,6 +410,10 @@ void setup() {
   // answered, and BLE carries on without it.
   app.gpsRx.begin(app.settings.sampleHz);
 
+  // A bus that is not there must not stop anything else: begin() reports and
+  // returns, and read() then yields nothing for the rest of the run.
+  app.can.begin();
+
   startCurrentMode();
 }
 
@@ -401,6 +458,7 @@ void loop() {
   // Drained in both modes: the status screen shows satellites while the
   // portal is up, and an undrained UART buffer would overflow either way.
   const bool newFix = app.gpsRx.tick();
+  pumpCanBus(now);
 
   if (app.modes.mode() == RadioMode::Wifi) {
     app.portal.tick(now);

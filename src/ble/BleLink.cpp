@@ -1,5 +1,9 @@
 #include "ble/BleLink.h"
 
+#include <atomic>
+
+#include <string.h>
+
 #include <NimBLEDevice.h>
 
 #include "core/Log.h"
@@ -12,6 +16,7 @@ namespace {
 constexpr size_t kMaxPacketsPerTick = 8;
 
 NimBLEServer* g_server = nullptr;
+NimBLECharacteristic* g_canMain = nullptr;
 NimBLECharacteristic* g_gpsMain = nullptr;
 NimBLECharacteristic* g_gpsTime = nullptr;
 bool g_connected = false;
@@ -21,15 +26,28 @@ uint16_t g_mtu = 23;
 uint16_t g_connHandle = 0;
 bool g_hasConn = false;
 
-// Set by the callbacks, drained by tick(). The callbacks run on the NimBLE
-// host task, and logging there puts a USB CDC write -- which can drop or
-// stall -- in the middle of connection handling. Flag it and let loop() do
-// the talking.
-// What RaceChrono last wrote to the CAN filter characteristic, drained by
-// tick(). Recording it answers a question we could not otherwise ask: whether
-// the app talks to that characteristic at all.
-uint8_t g_filterCmd = 0;
-bool g_filterWritten = false;
+// Filter writes arrive on the NimBLE host task and are applied on loop(),
+// which owns the filter table. Touching it from both would be a data race on
+// a structure that decides what reaches the app.
+//
+// A queue rather than one slot: RaceChrono sends deny-all followed by one
+// add-pid per channel, and a dropped command is a channel that silently
+// never appears. Seven bytes is the longest command the protocol defines.
+constexpr size_t kFilterQueueDepth = 8;
+constexpr size_t kFilterCmdBytes = 7;
+uint8_t g_filterQueue[kFilterQueueDepth][kFilterCmdBytes];
+uint8_t g_filterLens[kFilterQueueDepth];
+// Atomics, not volatile. NimBLE's host task is pinned to core 0
+// (CONFIG_BT_NIMBLE_PINNED_TO_CORE) and loop() runs on core 1, so this queue
+// genuinely crosses cores. volatile constrains only the compiler's treatment of
+// one object: it gives no guarantee that the payload write lands before the
+// index that publishes it. Without release/acquire the consumer can see the new
+// head and read a stale slot -- applying a wrong id or interval to a channel,
+// which is worse than the dropped command the overflow counter catches,
+// because nothing reports it.
+std::atomic<uint8_t> g_filterHead{0};
+std::atomic<uint8_t> g_filterTail{0};
+uint32_t g_filterOverflows = 0;
 
 bool g_logConnected = false;
 bool g_logDisconnected = false;
@@ -68,16 +86,22 @@ class ServerCallbacks : public NimBLEServerCallbacks {
 
 ServerCallbacks g_callbacks;
 
-// Accepts and ignores the filter commands: deny-all (0), allow-all (1) and
-// allow-one-PID (2) all mean the same thing to a device with no CAN bus. What
-// matters is that the write succeeds, so the app can finish configuring.
 class FilterCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* characteristic) override {
     const std::string value = characteristic->getValue();
-    if (!value.empty()) {
-      g_filterCmd = static_cast<uint8_t>(value[0]);
-      g_filterWritten = true;
+    if (value.empty() || value.size() > kFilterCmdBytes) {
+      return;
     }
+    const uint8_t head = g_filterHead.load(std::memory_order_relaxed);
+    const uint8_t next = static_cast<uint8_t>((head + 1) % kFilterQueueDepth);
+    if (next == g_filterTail.load(std::memory_order_acquire)) {
+      ++g_filterOverflows;
+      return;
+    }
+    memcpy(g_filterQueue[head], value.data(), value.size());
+    g_filterLens[head] = static_cast<uint8_t>(value.size());
+    // Release: everything written above is visible before the new head is.
+    g_filterHead.store(next, std::memory_order_release);
   }
 };
 
@@ -124,10 +148,9 @@ bool BleLink::begin(const char* deviceName, TelemetryRing& ring) {
   NimBLEService* service = g_server->createService(NimBLEUUID(kServiceUuid16));
 
   // The CAN characteristics come first, in the order the reference declares
-  // them. Nothing is ever notified on 0x0001 -- there is no CAN bus here --
-  // but both must exist for RaceChrono to finish setting the device up.
-  service->createCharacteristic(NimBLEUUID(kCanMainUuid16),
-                                NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+  // them.
+  g_canMain = service->createCharacteristic(
+      NimBLEUUID(kCanMainUuid16), NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
   NimBLECharacteristic* filter = service->createCharacteristic(
       NimBLEUUID(kCanFilterUuid16), NIMBLE_PROPERTY::WRITE);
   // Not owned: NimBLECharacteristic's destructor does not delete its
@@ -197,11 +220,6 @@ void BleLink::tick(uint32_t nowMs) {
     g_logDisconnected = false;
     Log::info("ble", "disconnected, advertising again");
   }
-  if (g_filterWritten) {
-    g_filterWritten = false;
-    Log::info("ble", "racechrono wrote filter command %u",
-              static_cast<unsigned>(g_filterCmd));
-  }
   if (g_logMtu != 0) {
     Log::info("ble", "mtu %u", (unsigned)g_logMtu);
     g_logMtu = 0;
@@ -233,3 +251,28 @@ void BleLink::publishTime(const uint8_t bytes[3]) {
     sentBytes_ += 3;
   }
 }
+
+void BleLink::publishCan(const uint8_t* packet, size_t len) {
+  if (g_canMain == nullptr || !connected_) {
+    return;
+  }
+  g_canMain->setValue(packet, len);
+  g_canMain->notify();
+  sentBytes_ += len;
+}
+
+bool BleLink::takeFilterCommand(uint8_t* out, size_t& len) {
+  const uint8_t tail = g_filterTail.load(std::memory_order_relaxed);
+  // Acquire: pairs with the producer's release, so a slot the head points past
+  // is fully written before it is read here.
+  if (tail == g_filterHead.load(std::memory_order_acquire)) {
+    return false;
+  }
+  len = g_filterLens[tail];
+  memcpy(out, g_filterQueue[tail], len);
+  g_filterTail.store(static_cast<uint8_t>((tail + 1) % kFilterQueueDepth),
+                     std::memory_order_release);
+  return true;
+}
+
+uint32_t BleLink::filterOverflows() const { return g_filterOverflows; }
