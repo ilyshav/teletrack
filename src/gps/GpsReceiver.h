@@ -33,13 +33,6 @@ class GpsReceiver {
   // Call from loop(). Returns true when a new NAV-PVT was decoded.
   bool tick();
 
-  // Puts the receiver into u-blox software backup: it keeps its ephemeris,
-  // almanac, time and last position in its own memory at about 15 uA, while
-  // its supply stays on. This is what makes the first fix after a wake take
-  // seconds rather than tens of seconds, and it does not depend on how this
-  // board wires the receiver's V_BCKP pin.
-  void sleep();
-
   const GpsFix& fix() const { return parser_.fix(); }
   bool timeValid() const { return parser_.timeValid(); }
   bool present() const { return present_; }

@@ -16,9 +16,4 @@ class Display {
 
   // Call from loop() only. The sole place that drives the display bus.
   virtual void tick(uint32_t nowMs, const DeviceStatus& status) = 0;
-
-  // Acknowledge on screen, then power the panel down. Defaulted rather than
-  // pure: only the board that can sleep has anything to do here, and the
-  // other one is the board already verified working.
-  virtual void sleep() {}
 };
