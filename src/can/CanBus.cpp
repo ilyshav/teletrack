@@ -4,9 +4,20 @@
 
 #if defined(BOARD_TBEAM)
 
+#include <Arduino.h>
 #include <driver/twai.h>
 
 #include "board/BoardConfig.h"
+
+bool CanBus::transceiverPresent() {
+  pinMode(BoardConfig::kCanRxPin, INPUT_PULLDOWN);
+  // The pull-down is weak (tens of kilohms) and the transceiver's output is
+  // not; a couple of milliseconds is far longer than either needs to settle.
+  delay(2);
+  const bool driven = digitalRead(BoardConfig::kCanRxPin) == HIGH;
+  pinMode(BoardConfig::kCanRxPin, INPUT);
+  return driven;
+}
 
 bool CanBus::begin() {
   // Idempotent. A second install fails because the first driver is still
@@ -27,11 +38,11 @@ bool CanBus::begin() {
   twai_general_config_t general = TWAI_GENERAL_CONFIG_DEFAULT(
       static_cast<gpio_num_t>(BoardConfig::kCanTxPin),
       static_cast<gpio_num_t>(BoardConfig::kCanRxPin), TWAI_MODE_LISTEN_ONLY);
-  // A busy 500 kbps bus delivers on the order of 1000-2000 frames a second and
-  // loop() turns at roughly 1 kHz, so a pass sees a couple of frames. The queue
-  // absorbs the jitter; an overflow costs a frame the filter would probably
-  // have dropped anyway.
-  general.rx_queue_len = 32;
+  // Sized for a display repaint rather than for loop()'s average pass -- see
+  // kRxQueueLen. An overflow is no longer assumed harmless either: RaceChrono
+  // subscribes to specific ids, so a dropped frame is as likely to be one that
+  // was asked for as one the filter would have discarded.
+  general.rx_queue_len = kRxQueueLen;
   general.tx_queue_len = 0;  // nothing is ever transmitted
 
   const twai_timing_config_t timing = TWAI_TIMING_CONFIG_500KBITS();
@@ -86,7 +97,73 @@ bool CanBus::read(CanFrame& out) {
   return true;
 }
 
+CanBus::Diagnostics CanBus::diagnostics() const {
+  Diagnostics out;
+  if (!present_) {
+    out.state = "not installed";
+    return out;
+  }
+
+  twai_status_info_t status;
+  if (twai_get_status_info(&status) != ESP_OK) {
+    out.state = "unreadable";
+    return out;
+  }
+
+  switch (status.state) {
+    case TWAI_STATE_STOPPED:
+      out.state = "STOPPED";
+      break;
+    case TWAI_STATE_RUNNING:
+      out.state = "RUNNING";
+      break;
+    case TWAI_STATE_BUS_OFF:
+      out.state = "BUS_OFF";
+      break;
+    case TWAI_STATE_RECOVERING:
+      out.state = "RECOVERING";
+      break;
+    default:
+      out.state = "?";
+      break;
+  }
+  out.rxErrors = status.rx_error_counter;
+  out.busErrors = status.bus_error_count;
+  out.missed = status.rx_missed_count + status.rx_overrun_count;
+  out.arbLost = status.arb_lost_count;
+  return out;
+}
+
+uint16_t CanBus::takeLost() {
+  if (!present_) {
+    return 0;
+  }
+  twai_status_info_t status;
+  if (twai_get_status_info(&status) != ESP_OK) {
+    return 0;
+  }
+
+  // Both counters are cumulative and both mean the same thing to us: a frame
+  // was on the bus and we never saw it.
+  const uint32_t total = status.rx_missed_count + status.rx_overrun_count;
+  const uint32_t since = total - lostSeen_;
+  lostSeen_ = total;
+  return since > UINT16_MAX ? UINT16_MAX : static_cast<uint16_t>(since);
+}
+
 #else
+
+bool CanBus::transceiverPresent() {
+  return false;  // no transceiver on this board, and no pin to test
+}
+
+CanBus::Diagnostics CanBus::diagnostics() const {
+  Diagnostics out;
+  out.state = "no transceiver";
+  return out;
+}
+
+uint16_t CanBus::takeLost() { return 0; }
 
 bool CanBus::begin() {
   present_ = false;

@@ -14,10 +14,9 @@ enum class ButtonEvent : uint8_t {
 // Pure and clock-free: the caller supplies the timestamp, so every threshold
 // here is host-testable without a button or a board.
 //
-// Both gestures live on one pin because it is the only pin that can wake the
-// chip -- see the sleep-mode design. They stay distinguishable because a hold
-// is not a click: a press longer than kClickMaxMs resets the click sequence
-// rather than extending it.
+// Both gestures live on one pin because the board has only the one button.
+// They stay distinguishable because a hold is not a click: a press longer than
+// kClickMaxMs resets the click sequence rather than extending it.
 class HoldDetector {
  public:
   static constexpr uint32_t kHoldMs = 3000;
@@ -27,7 +26,7 @@ class HoldDetector {
   static constexpr uint32_t kClickMaxMs = 500;
   // All the clicks of a sequence must land within this of the first.
   static constexpr uint32_t kMultiClickWindowMs = 1200;
-  static constexpr uint8_t kClicksForSleep = 3;
+  static constexpr uint8_t kClicksForScreen = 3;
 
   ButtonEvent update(bool pressed, uint32_t nowMs);
 

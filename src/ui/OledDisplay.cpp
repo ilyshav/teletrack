@@ -5,22 +5,22 @@
 #include <stdio.h>
 
 #include "board/BoardConfig.h"
+#include "can/CanBus.h"
 #include "core/Log.h"
 #include "radio/HoldDetector.h"
 
 namespace {
 
+// Only what is actually drawn. Uptime, the client count and the drop count are
+// on no screen, so comparing them would repaint for nothing; a field that IS
+// drawn and omitted here freezes on a stale value.
 bool headerDiffers(const DeviceStatus& a, const DeviceStatus& b) {
-  // Only what is actually drawn. Uptime, the client count and the drop count
-  // left the header, so comparing them would repaint for nothing; the battery
-  // fields arrived, and omitting one freezes it on a stale value.
   return a.mode != b.mode || (a.holdMs / 100u) != (b.holdMs / 100u) ||
-         a.batteryPresent != b.batteryPresent ||
-         a.batteryCharging != b.batteryCharging ||
-         a.batteryFull != b.batteryFull ||
-         a.batteryPercent != b.batteryPercent ||
-         a.batteryMilliVolts != b.batteryMilliVolts ||
-         a.gpsPresent != b.gpsPresent || a.gpsTimeValid != b.gpsTimeValid ||
+         a.screen != b.screen || a.canHealth != b.canHealth;
+}
+
+bool gpsScreenDiffers(const DeviceStatus& a, const DeviceStatus& b) {
+  return a.gpsPresent != b.gpsPresent || a.gpsTimeValid != b.gpsTimeValid ||
          a.gpsFix.satellites != b.gpsFix.satellites ||
          a.gpsFix.fixType != b.gpsFix.fixType ||
          a.gpsFix.fixQuality != b.gpsFix.fixQuality ||
@@ -29,6 +29,40 @@ bool headerDiffers(const DeviceStatus& a, const DeviceStatus& b) {
          a.gpsFix.speedKmh != b.gpsFix.speedKmh ||
          a.gpsFix.hdop != b.gpsFix.hdop ||
          a.gpsFix.seconds != b.gpsFix.seconds;
+}
+
+bool canScreenDiffers(const DeviceStatus& a, const DeviceStatus& b) {
+  return a.canPresent != b.canPresent ||
+         a.canTransceiver != b.canTransceiver || a.canState != b.canState ||
+         a.canFramesPerSec != b.canFramesPerSec ||
+         a.canLostPerSec != b.canLostPerSec || a.canRxErrors != b.canRxErrors ||
+         a.canBusErrors != b.canBusErrors || a.canIdsSeen != b.canIdsSeen ||
+         a.canExtendedFrames != b.canExtendedFrames;
+}
+
+// The screen that is NOT on show can have every number change without costing a
+// repaint -- nothing of it is visible.
+bool statusDiffers(const DeviceStatus& a, const DeviceStatus& b) {
+  if (headerDiffers(a, b)) {
+    return true;
+  }
+  return a.screen == Screen::Gps ? gpsScreenDiffers(a, b)
+                                 : canScreenDiffers(a, b);
+}
+
+// Four characters at most, so it fits beside the radio and the hold countdown.
+const char* healthText(BusStatus health) {
+  switch (health) {
+    case BusStatus::Healthy:
+      return "CAN ok";
+    case BusStatus::Lossy:
+      return "CAN lossy";
+    case BusStatus::Silent:
+      return "CAN --";
+    case BusStatus::Starting:
+      break;
+  }
+  return "CAN ...";
 }
 
 }  // namespace
@@ -77,7 +111,7 @@ void OledDisplay::tick(uint32_t nowMs, const DeviceStatus& status) {
   }
   lastDrawMs_ = nowMs;
 
-  if (drawnOnce_ && !headerDiffers(status, drawnStatus_)) {
+  if (drawnOnce_ && !statusDiffers(status, drawnStatus_)) {
     return;
   }
 
@@ -91,23 +125,6 @@ void OledDisplay::draw(const DeviceStatus& status) {
   // having at this size, so the whole thing is rebuilt and sent each frame.
   // 1 KB over I2C at 400 kHz is about 25 ms, inside the 100 ms budget.
   u8g2_.clearBuffer();
-
-  // Battery on the left. The state character sits between the percentage and
-  // the voltage so the two numbers stay adjacent and readable at a glance.
-  char left[kCols + 1];
-  if (!status.batteryPresent) {
-    // No cell fitted. "0%- 0.00V" would be a lie, and a bench T-Beam running
-    // on USB alone is how most of this gets tested.
-    snprintf(left, sizeof(left), "USB");
-  } else {
-    const char state = status.batteryFull      ? '='
-                       : status.batteryCharging ? '+'
-                                                : '-';
-    snprintf(left, sizeof(left), "%u%%%c %u.%02uV",
-             static_cast<unsigned>(status.batteryPercent), state,
-             static_cast<unsigned>(status.batteryMilliVolts / 1000u),
-             static_cast<unsigned>((status.batteryMilliVolts % 1000u) / 10u));
-  }
 
   // Which radio is running, and nothing about who is connected to it. The
   // client and drop counts are in /api/status, which is where they are read.
@@ -129,13 +146,32 @@ void OledDisplay::draw(const DeviceStatus& status) {
              status.mode == RadioMode::Wifi ? "AP" : "BLE");
   }
 
-  // One inverse-video row. Widest case is "100%= 4.20V" (11) against
-  // "HOLD 3s" (7), which is 20 of 21 columns with a separator.
+  // Bus health takes the slot the battery readout used to have. It stays on
+  // both screens deliberately: the whole reason to look at the CAN screen is
+  // that this said something other than ok, and it has to be visible from the
+  // GPS screen to prompt that.
+  //
+  // One inverse-video row. Widest case is "CAN lossy" (9) against "HOLD 3s"
+  // (7), which is 17 of 21 columns with a separator.
   u8g2_.drawBox(0, 0, 128, kHeaderRows * kRowHeight);
   u8g2_.setDrawColor(0);
-  u8g2_.drawStr(1, kRowHeight - 1, left);
+  u8g2_.drawStr(1, kRowHeight - 1, healthText(status.canHealth));
   u8g2_.drawStr(128 - 1 - u8g2_.getStrWidth(right), kRowHeight - 1, right);
   u8g2_.setDrawColor(1);
+
+  if (status.screen == Screen::Gps) {
+    drawGpsScreen(status);
+  } else {
+    drawCanScreen(status);
+  }
+  u8g2_.sendBuffer();
+}
+
+int16_t OledDisplay::row(size_t n) const {
+  return static_cast<int16_t>((kHeaderRows + n + 1) * kRowHeight - 1);
+}
+
+void OledDisplay::drawGpsScreen(const DeviceStatus& status) {
 
   // Row 1: satellite count and fix state. The count is the number that
   // answers "is this thing working yet", so it is always on the left.
@@ -153,11 +189,6 @@ void OledDisplay::draw(const DeviceStatus& status) {
                       : fix.fixType == 3 ? "3D FIX"
                       : fix.fixType == 2 ? "2D FIX"
                                          : "NO FIX";
-
-  // Status row n, counting from 0 immediately below the header.
-  auto row = [this](size_t n) {
-    return static_cast<int16_t>((kHeaderRows + n + 1) * kRowHeight - 1);
-  };
 
   u8g2_.drawStr(1, row(0), sats);
   u8g2_.drawStr(128 - 1 - u8g2_.getStrWidth(state), row(0), state);
@@ -200,19 +231,64 @@ void OledDisplay::draw(const DeviceStatus& status) {
              static_cast<unsigned>(fix.minute), static_cast<unsigned>(fix.seconds));
     u8g2_.drawStr(1, row(5), line);
   }
-
-  u8g2_.sendBuffer();
 }
 
-void OledDisplay::sleep() {
-  if (!ready_) {
+void OledDisplay::drawCanScreen(const DeviceStatus& status) {
+  char line[kCols + 1];
+
+  // The bitrate is fixed and listen-only is not a mode this firmware can leave,
+  // so the top line is a constant. It is here because the first question about
+  // a CAN reading is always "at what bitrate".
+  snprintf(line, sizeof(line), "%luk listen-only",
+           static_cast<unsigned long>(CanBus::kBitrateKbps));
+  u8g2_.drawStr(1, row(0), line);
+
+  // The wiring advice replaces the counters only when the pin test and the bus
+  // agree that nothing is there. A failed pin test WITH frames arriving means
+  // the test was wrong rather than the wiring, and hiding live data behind a
+  // false negative would be the worse failure of the two.
+  if (!status.canTransceiver && status.canFramesPerSec == 0) {
+    u8g2_.drawStr(1, row(2), "NO TRANSCEIVER");
+    u8g2_.drawStr(1, row(3), "check 3V3 and GND,");
+    u8g2_.drawStr(1, row(4), "then swap RX/TX");
     return;
   }
-  // Acknowledge the gesture before everything goes dark. Without it a triple
-  // click and a crash look identical from the outside.
-  u8g2_.clearBuffer();
-  u8g2_.drawStr(1, kRowHeight - 1, "SLEEPING");
-  u8g2_.sendBuffer();
-  delay(600);  // long enough to read; the board is about to stop anyway
-  u8g2_.setPowerSave(1);
+
+  snprintf(line, sizeof(line), "state %s",
+           status.canPresent ? status.canState : "no driver");
+  u8g2_.drawStr(1, row(1), line);
+
+  snprintf(line, sizeof(line), "frames %9lu/s",
+           static_cast<unsigned long>(status.canFramesPerSec));
+  u8g2_.drawStr(1, row(2), line);
+
+  snprintf(line, sizeof(line), "lost %13lu",
+           static_cast<unsigned long>(status.canLostPerSec));
+  u8g2_.drawStr(1, row(3), line);
+
+  snprintf(line, sizeof(line), "rx err %11lu",
+           static_cast<unsigned long>(status.canRxErrors));
+  u8g2_.drawStr(1, row(4), line);
+
+  snprintf(line, sizeof(line), "bus err %10lu",
+           static_cast<unsigned long>(status.canBusErrors));
+  u8g2_.drawStr(1, row(5), line);
+
+  // Extended ids share the last row with the id count, and only when some have
+  // been seen. The MX-5's powertrain bus is 11-bit throughout, so anything here
+  // means a diagnostic tool is active or this is the wrong bus -- and it also
+  // explains an id count that looks lower than the traffic suggests.
+  if (status.canExtendedFrames > 0) {
+    // Clamped: the count is unbounded and 21 columns are not. Five digits is
+    // plenty to say "this is happening a lot".
+    const unsigned long ext = status.canExtendedFrames > 99999UL
+                                  ? 99999UL
+                                  : status.canExtendedFrames;
+    snprintf(line, sizeof(line), "ids %u ext %lu",
+             static_cast<unsigned>(status.canIdsSeen), ext);
+  } else {
+    snprintf(line, sizeof(line), "ids seen %9u",
+             static_cast<unsigned>(status.canIdsSeen));
+  }
+  u8g2_.drawStr(1, row(6), line);
 }

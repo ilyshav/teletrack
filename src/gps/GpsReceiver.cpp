@@ -253,25 +253,6 @@ bool GpsReceiver::tick() {
   return decoded;
 }
 
-void GpsReceiver::sleep() {
-  if (!present_) {
-    return;
-  }
-  // UBX-RXM-PMREQ, taken from the reference implementation's
-  // powerOffWithInterrupt() rather than reconstructed from the protocol
-  // tables. Little-endian throughout, like all of UBX.
-  const uint8_t payload[16] = {
-      0x00, 0x00, 0x00, 0x00,  // version 0, then three reserved bytes
-      0x00, 0x00, 0x00, 0x00,  // duration 0: indefinite, until woken
-      0x06, 0x00, 0x00, 0x00,  // flags: backup | force
-      0x08, 0x00, 0x00, 0x00,  // wakeupSources: UART RX
-  };
-  sendUbx(0x02, 0x41, payload, sizeof(payload));
-  // No ACK is waited for. The receiver may go down before it sends one, and
-  // waiting would only delay the sleep.
-  Log::info("gps", "receiver in software backup");
-}
-
 #else
 
 bool GpsReceiver::begin(uint8_t rateHz) {
@@ -282,6 +263,5 @@ bool GpsReceiver::begin(uint8_t rateHz) {
 
 bool GpsReceiver::tick() { return false; }
 
-void GpsReceiver::sleep() {}  // no receiver on this board
 
 #endif

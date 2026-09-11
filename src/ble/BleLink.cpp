@@ -185,11 +185,12 @@ bool BleLink::begin(const char* deviceName, TelemetryRing& ring) {
 void BleLink::end() {
   // Deliberately NOT NimBLEDevice::deinit(). Tearing the stack down while its
   // own host task is running it crashes with PC=0 inside nimble_port_run()
-  // (NimBLEDevice.cpp:837) -- observed on a mode switch, and again on sleep.
+  // (NimBLEDevice.cpp:837) -- observed on a mode switch, and on any other
+  // teardown that called end().
   // The reference implementation never deinitialises either; that was our
   // invention and it has had two ways to bite.
   //
-  // Going quiet is all a mode switch or a sleep actually needs: advertising
+  // Going quiet is all a mode switch actually needs: advertising
   // stops and the peer is dropped, so the radio is silent and the front end is
   // free for WiFi. The stack stays up, and begin() knows how to find it.
   NimBLEDevice::stopAdvertising();

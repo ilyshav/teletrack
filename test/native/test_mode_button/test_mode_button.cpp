@@ -144,7 +144,7 @@ static void test_a_hold_still_works_after_two_clicks() {
 
 static void test_bouncing_contacts_do_not_manufacture_a_triple_click() {
   // The failure this guards against: a worn switch chattering three times
-  // inside the window and putting the board to sleep on its own.
+  // inside the window and switching the screen on its own.
   HoldDetector d;
   uint32_t now = 0;
   d.update(true, now++);

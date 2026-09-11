@@ -3,17 +3,17 @@
 #include <math.h>
 
 #include <Arduino.h>
-#include <driver/rtc_io.h>
-#include <esp_sleep.h>
 
 #include "ble/BleLink.h"
 #include "ble/RaceChronoGps.h"
 #include "ble/TelemetryRing.h"
 #include "board/BoardConfig.h"
 #include "board/Pmu.h"
+#include "can/BusStatus.h"
 #include "can/CanBus.h"
 #include "can/CanFilter.h"
 #include "can/CanFrame.h"
+#include "can/CanStats.h"
 #include "config/ConfigPortal.h"
 #include "config/Settings.h"
 #include "core/DeviceStatus.h"
@@ -76,6 +76,14 @@ struct App {
   GpsReceiver gpsRx;
   CanBus can;
   CanFilter canFilter;
+  CanStats canStats;
+  // Which page the display is on. Moved by a triple click on the mode button.
+  Screen screen = Screen::Gps;
+  // The boot-time pin test, kept because it cannot be repeated: the TWAI driver
+  // owns the pin from begin() onwards.
+  bool canTransceiver = false;
+  // Read once per published window rather than per pass -- see pumpCanBus().
+  CanBus::Diagnostics canDiag;
   ModeButton button;
   ModeController modes;
   Pmu pmu;
@@ -122,64 +130,6 @@ void stopCurrentMode(RadioMode leaving) {
     app.ble.end();
   }
 }
-
-#if defined(BOARD_TBEAM)
-
-void enterSleep() {
-  // Before anything is torn down. A triple click can be recognised while the
-  // button is still DOWN: the third click's release may go unsampled, and the
-  // press that reveals it is the one still in progress. Arming a wake on LOW
-  // while GPIO0 is already LOW satisfies the wake condition the instant deep
-  // sleep begins, so the board wakes straight back up -- SLEEPING flashes and
-  // it reboots, looking exactly like a crash.
-  //
-  // This has to happen first. Abandoning the sleep after the radio is down and
-  // the GPS is in backup would leave the board half torn down with no way back
-  // except a reboot.
-  const uint32_t deadline = millis() + 5000;
-  while (digitalRead(BoardConfig::kModeButtonPin) == LOW && millis() < deadline) {
-    delay(10);
-  }
-  if (digitalRead(BoardConfig::kModeButtonPin) == LOW) {
-    Log::warn("sleep", "button still held, not sleeping");
-    return;
-  }
-  delay(50);  // let the contact settle before arming on its level
-
-  Log::info("sleep", "going down");
-  // The radio comes down the way a mode switch brings it down, so a connected
-  // client sees a clean disconnect rather than a link that simply stops.
-  stopCurrentMode(app.modes.mode());
-  // Before its neighbours lose power: the receiver has to be told to hold its
-  // own almanac while it still has a supply to be told over.
-  app.gpsRx.sleep();
-  app.display.sleep();
-  app.pmu.prepareForSleep();
-
-  // GPIO0 going low. It is a strapping pin, but a deep-sleep wake is not a
-  // power-on reset: the ROM takes its fast path through the wake stub and
-  // never re-reads the boot-mode straps, so waking on it cannot drop the
-  // board into download mode.
-  // The pad's pull is not configured by enabling the wake source, and in deep
-  // sleep the digital-domain pull is gone. Without this the wake pin can float
-  // and either wake the board at random or never wake it at all.
-  const gpio_num_t wakePin = static_cast<gpio_num_t>(BoardConfig::kModeButtonPin);
-  rtc_gpio_pullup_en(wakePin);
-  rtc_gpio_pulldown_dis(wakePin);
-  esp_sleep_enable_ext0_wakeup(wakePin, 0);
-  esp_deep_sleep_start();  // does not return; a wake restarts setup()
-}
-
-#else
-
-void enterSleep() {
-  // This board's mode button is GPIO39, and the ESP32-S3's RTC GPIOs stop at
-  // 21, so nothing could wake it again. A board asleep with no wake source
-  // needs a power cycle to recover, which is worse than not sleeping.
-  Log::warn("sleep", "not supported on this board");
-}
-
-#endif
 
 #if !defined(BOARD_TBEAM)
 // Builds a synthetic fix walking a slow circle, at the wall-clock time
@@ -331,12 +281,33 @@ void pumpCanBus(uint32_t nowMs) {
   // Bounded so a busy bus cannot monopolise a pass of loop().
   CanFrame frame;
   for (int i = 0; i < 32 && app.can.read(frame); ++i) {
+    // Counted before the filter, not after: the CAN screen answers "what is on
+    // this bus", which is not the same question as "what did RaceChrono ask
+    // for", and a filter that matches nothing must still show a live bus.
+    app.canStats.recordFrame(frame.id);
     if (!app.ble.connected() || !app.canFilter.shouldNotify(frame.id, nowMs)) {
       continue;
     }
     uint8_t packet[CanFrame::kMaxPacketBytes];
     const size_t len = encodeCanPacket(frame, packet);
     app.ble.publishCan(packet, len);
+  }
+
+  // Frames the controller dropped before the reader ever saw them. Polled at
+  // 10 Hz rather than every pass: takeLost() locks inside the TWAI driver, and
+  // a frame lost at the very end of a window is just as well counted in the one
+  // that publishes a moment later.
+  static uint32_t lastLostPollMs = 0;
+  if (nowMs - lastLostPollMs >= 100) {
+    lastLostPollMs = nowMs;
+    app.canStats.recordLost(app.can.takeLost());
+  }
+
+  if (app.canStats.tick(nowMs)) {
+    // Read here rather than in buildStatus(), which runs on every pass of
+    // loop() at roughly 1 kHz. twai_get_status_info() locks inside the driver,
+    // and once per published window is the cadence the screen shows anyway.
+    app.canDiag = app.can.diagnostics();
   }
 }
 
@@ -352,13 +323,18 @@ DeviceStatus buildStatus(uint32_t nowMs) {
   s.gpsTimeValid = app.gpsRx.timeValid();
   s.gpsFix = app.gpsRx.fix();
 
-  const BatteryState battery = app.pmu.battery();
-  s.batteryPresent = battery.present;
-  s.batteryUsbPresent = battery.usbPresent;
-  s.batteryCharging = battery.charging;
-  s.batteryFull = battery.full;
-  s.batteryPercent = battery.percent;
-  s.batteryMilliVolts = battery.milliVolts;
+  const CanSnapshot& can = app.canStats.snapshot();
+  s.screen = app.screen;
+  s.canPresent = app.can.present();
+  s.canTransceiver = app.canTransceiver;
+  s.canHealth = busStatus(app.can.present(), can.framesPerSec, can.lostPerSec);
+  s.canState = app.canDiag.state;
+  s.canFramesPerSec = can.framesPerSec;
+  s.canLostPerSec = can.lostPerSec;
+  s.canRxErrors = app.canDiag.rxErrors;
+  s.canBusErrors = app.canDiag.busErrors;
+  s.canIdsSeen = can.idsSeen;
+  s.canExtendedFrames = can.extendedFrames;
   return s;
 }
 
@@ -377,13 +353,6 @@ void updateRate(uint32_t nowMs) {
 void setup() {
   Log::begin(115200);
   Log::info("boot", "teletrack on %s", BoardConfig::kBoardName);
-  // Says outright whether this boot is a wake. Without it a board that wakes
-  // and then hangs looks exactly like one that never woke at all, and the two
-  // need completely different investigations.
-  if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0) {
-    Log::info("boot", "woke from sleep on the mode button");
-  }
-
   // Before the display: on the T-Beam the panel sits on a rail this switches.
   if (!app.pmu.begin()) {
     Log::error("pmu", "power management failed to start");
@@ -410,6 +379,14 @@ void setup() {
   // answered, and BLE carries on without it.
   app.gpsRx.begin(app.settings.sampleHz);
 
+  // Before begin(), which hands the pin to the TWAI driver. This is the only
+  // measurement that tells a quiet bus from a swapped RX/TX, and it can never
+  // be taken again once the driver owns the pad.
+  app.canTransceiver = CanBus::transceiverPresent();
+  Log::info("can", "transceiver on RX: %s",
+            app.canTransceiver ? "driving the pin"
+                               : "NOT DRIVING -- check power and RX/TX");
+
   // A bus that is not there must not stop anything else: begin() reports and
   // returns, and read() then yields nothing for the rest of the run.
   app.can.begin();
@@ -419,9 +396,6 @@ void setup() {
 
 void loop() {
   const uint32_t now = millis();
-
-  // Re-reads the battery at most once a second; cheap on every other pass.
-  app.pmu.tick(now);
 
   // A device-name save flags this; acted on here, never inside the request
   // handler, and only once the response has had a moment to leave the async
@@ -449,7 +423,8 @@ void loop() {
       break;
     }
     case ButtonEvent::TripleClick:
-      enterSleep();
+      app.screen = app.screen == Screen::Gps ? Screen::Can : Screen::Gps;
+      Log::info("ui", "screen: %s", app.screen == Screen::Gps ? "GPS" : "CAN");
       break;
     case ButtonEvent::None:
       break;

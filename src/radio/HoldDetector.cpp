@@ -79,7 +79,7 @@ ButtonEvent HoldDetector::classifyRelease(uint32_t releasedAtMs) {
     ++clicks_;
   }
 
-  if (clicks_ >= kClicksForSleep) {
+  if (clicks_ >= kClicksForScreen) {
     clicks_ = 0;
     return ButtonEvent::TripleClick;
   }

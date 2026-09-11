@@ -7,9 +7,10 @@
 #include "ui/Display.h"
 
 // SH1106 128x64 over I2C. At the 6x8 font that is 21 columns by 8 rows: one
-// header row in inverse video, then rows of GPS status. The scrolling
-// log that used to live here is gone -- on 21 columns it showed six useful
-// characters per line, and serial carries the full log with timestamps.
+// header row in inverse video, then seven rows belonging to whichever screen is
+// on show. The scrolling log that used to live here is gone -- on 21 columns it
+// showed six useful characters per line, and serial carries the full log with
+// timestamps.
 class OledDisplay : public Display {
  public:
   static constexpr uint32_t kMinRedrawIntervalMs = 100;  // 10 Hz ceiling
@@ -24,10 +25,14 @@ class OledDisplay : public Display {
 
   bool begin() override;
   void tick(uint32_t nowMs, const DeviceStatus& status) override;
-  void sleep() override;
 
  private:
   void draw(const DeviceStatus& status);
+  // Both take a row accessor so neither needs to know where the header ends.
+  void drawGpsScreen(const DeviceStatus& status);
+  void drawCanScreen(const DeviceStatus& status);
+  // Baseline y for content row n, counting from 0 below the header.
+  int16_t row(size_t n) const;
 
   // The pins are passed to the constructor, not left to Wire. U8g2's hardware
   // I2C begin() calls Wire.begin() with no arguments, which on the S3 resets

@@ -124,12 +124,39 @@ From LilyGO's own board support (Xinyuan-LilyGO/LilyGo-LoRa-Series,
 | ALDO2 | SD card |
 | ALDO3 | LoRa |
 | **ALDO4** | **GPS** |
-| VBACKUP | GNSS RTC backup — without it every start is a cold start |
+| VBACKUP | the AXP2101's coin-cell domain — **does not reach the GNSS `V_BCKP`** |
 | DCDC1 | ESP32 VDD — protected, never disable |
 
 **The display is on none of them.** An earlier version of `Pmu.cpp` labelled
 ALDO2 "display" and ALDO3 "GPS"; both were wrong, and hours went into power
 theories for a dark panel whose actual fault was an I2C address collision.
+
+### Every GPS start is a cold start, about 35 s
+
+**Symptom:** the receiver takes 30–35 s to fix after a power cycle, outdoors with
+a clear sky and a good antenna, even when the previous fix was a minute earlier.
+NAV-PVT reports valid time only after about 20 s.
+
+**Cause:** the board's coin cell does not hold the MAX-M10S's `V_BCKP`. The
+20-second figure is the proof. A receiver whose backup domain has power keeps its
+own RTC running and reports valid time within a second or two of boot, long
+before it has a fix; recovering time at 20 s means it was decoded from the
+satellite downlink, so the backup domain was dead and the navigation database was
+empty.
+
+The cell is an SII MS412FE, about 1 mAh. That is sized for the PCF8563 RTC on
+Wire1 — roughly 250 nA, so over a year — and not for a GNSS backup domain at
+~15 µA, which would flatten it in under three days. `Pmu::begin()` used to enable
+the AXP2101's button-battery charger on the chance its rail reached the receiver.
+It does not, and the call is gone.
+
+**There is nothing to fix in firmware.** u-blox's own cold-start figure is ~28 s
+and the ephemeris download is the floor: the navigation message carries it in
+subframes that repeat every 30 s, so no antenna or setting moves it. A *working*
+backup cell would not have helped much either — it buys a hot start only while
+the ephemeris is under about two hours old, and past that a warm start costs the
+same ~30 s as a cold one. Anything faster needs AssistNow data injected over
+UART, not a battery.
 
 ### GPS pins
 
@@ -166,87 +193,6 @@ reset but not a power cycle.
 Configuration goes to the **RAM layer only** (`CFG-VALSET layers = 0x01`), so
 the module is never permanently altered and a power cycle returns it to its
 own defaults.
-
----
-
-## Sleep
-
-A triple click on the mode button sleeps the T-Beam; any press wakes it.
-
-**Why both gestures are on one button.** Keeping the GPS's memory alive means the
-ESP32 deep-sleeps rather than powering off, waking from deep sleep needs an RTC
-GPIO, and the ESP32-S3's stop at GPIO21 — `SOC_RTCIO_PIN_COUNT` is 22. The
-AXP2101's power key reaches the CPU only on GPIO 40, so it can *trigger* a sleep
-but can never wake one. GPIO0 is the only candidate.
-
-**Why triple click and not a longer hold.** The button already fires a radio
-switch at three seconds. A longer hold passes that on its way, so both actions
-would have had to be decided on release — a real change to a working gesture,
-bought for nothing.
-
-**The DevKitC cannot sleep at all.** Its mode button is GPIO39, past the RTC
-range, so a triple click there logs and does nothing. A board asleep with no wake
-source needs a power cycle to recover.
-
-**Waking on GPIO0 does not enter download mode.** The boot-mode straps are read
-at a power-on reset; a deep-sleep wake takes the ROM's fast path through the wake
-stub and never re-reads them.
-
-### The GPS is put to sleep, not powered off
-
-`UBX-RXM-PMREQ` (class 0x02, id 0x41, 16 bytes) places the M10 in software
-backup: it holds ephemeris, almanac and time in its own memory at about 15 µA
-while ALDO4 stays powered. Cutting ALDO4 instead would leave a warm start
-depending on whether this board routes `V_BCKP` to a backup supply, which is
-unknown — LilyGO's own support for the S3 Supreme never enables that rail.
-
-Two consequences, both of which otherwise present as a dead GPS:
-
-- **A receiver in backup is silent** and wakes on UART activity, so the baud probe
-  sends filler bytes before listening. Without that it reads as absent at every
-  baud, on every boot after the first sleep, recoverable only by a power cycle.
-- **Software backup keeps navigation data but not the RAM-layer configuration**,
-  so the receiver returns at its default baud emitting NMEA. The probe and
-  reconfiguration that already run on every boot cover this.
-
-### Never deep-sleep while the wake pin is asserted
-
-`esp_sleep_enable_ext0_wakeup(pin, 0)` wakes on the pin going LOW. If it is
-already LOW when `esp_deep_sleep_start()` runs, the condition is satisfied
-immediately and the board wakes at once — the screen flashes `SLEEPING` and it
-reboots, which looks exactly like a crash.
-
-This is reachable here, not theoretical: a triple click can be recognised while
-the button is still down. The third click's release may go unsampled, and the
-press that reveals it is the one still in progress. `enterSleep()` therefore
-waits for the button to come up **before touching anything** — abandoning the
-sleep after the radio is down and the GPS is in backup would leave the board
-half torn down.
-
-The wake pad's pull is also configured explicitly with `rtc_gpio_pullup_en()`.
-Enabling the wake source does not do it, and the digital-domain pull is gone in
-deep sleep, so the pin could otherwise float.
-
-### Rails switched off for sleep must be switched back on at boot
-
-Deep sleep does not power-cycle the AXP2101, so anything `prepareForSleep()`
-disables is **still disabled when the board wakes** — a wake re-enters
-`Pmu::begin()` with the rails down.
-
-This was not theoretical. The first sleep worked, the board woke, the USB
-peripheral re-enumerated, and then it hung with a dark screen and no serial
-output at all: **the display's supply was among the rails that never came
-back**, and `u8g2`'s init blocks forever on an I2C device that is not there.
-That is the same symptom as the 0x3C address collision from the T-Beam phase,
-and just as hard to read from the outside.
-
-`Pmu::begin()` now enables ALDO1, ALDO2, BLDO1 and BLDO2 explicitly rather than
-relying on the AXP2101's power-up state, which only applies to a real power-on.
-
-**DC3, DC4 and DC5 are no longer touched at all.** The vendor calls them the M.2
-interface and nothing here knows what else hangs off them. The saving was never
-measured and is not worth guessing about on a board that has already failed to
-come back once.
 
 ### LoRa is off from boot
 
