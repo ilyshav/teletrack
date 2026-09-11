@@ -124,12 +124,39 @@ From LilyGO's own board support (Xinyuan-LilyGO/LilyGo-LoRa-Series,
 | ALDO2 | SD card |
 | ALDO3 | LoRa |
 | **ALDO4** | **GPS** |
-| VBACKUP | GNSS RTC backup — without it every start is a cold start |
+| VBACKUP | the AXP2101's coin-cell domain — **does not reach the GNSS `V_BCKP`** |
 | DCDC1 | ESP32 VDD — protected, never disable |
 
 **The display is on none of them.** An earlier version of `Pmu.cpp` labelled
 ALDO2 "display" and ALDO3 "GPS"; both were wrong, and hours went into power
 theories for a dark panel whose actual fault was an I2C address collision.
+
+### Every GPS start is a cold start, about 35 s
+
+**Symptom:** the receiver takes 30–35 s to fix after a power cycle, outdoors with
+a clear sky and a good antenna, even when the previous fix was a minute earlier.
+NAV-PVT reports valid time only after about 20 s.
+
+**Cause:** the board's coin cell does not hold the MAX-M10S's `V_BCKP`. The
+20-second figure is the proof. A receiver whose backup domain has power keeps its
+own RTC running and reports valid time within a second or two of boot, long
+before it has a fix; recovering time at 20 s means it was decoded from the
+satellite downlink, so the backup domain was dead and the navigation database was
+empty.
+
+The cell is an SII MS412FE, about 1 mAh. That is sized for the PCF8563 RTC on
+Wire1 — roughly 250 nA, so over a year — and not for a GNSS backup domain at
+~15 µA, which would flatten it in under three days. `Pmu::begin()` used to enable
+the AXP2101's button-battery charger on the chance its rail reached the receiver.
+It does not, and the call is gone.
+
+**There is nothing to fix in firmware.** u-blox's own cold-start figure is ~28 s
+and the ephemeris download is the floor: the navigation message carries it in
+subframes that repeat every 30 s, so no antenna or setting moves it. A *working*
+backup cell would not have helped much either — it buys a hot start only while
+the ephemeris is under about two hours old, and past that a warm start costs the
+same ~30 s as a cold one. Anything faster needs AssistNow data injected over
+UART, not a battery.
 
 ### GPS pins
 

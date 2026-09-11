@@ -26,13 +26,4 @@ struct DeviceStatus {
   bool gpsPresent = false;
   bool gpsTimeValid = false;
   GpsFix gpsFix;
-  // Battery, from the AXP2101. batteryPresent false with batteryUsbPresent
-  // true is a board running on USB with no cell fitted -- which is not the
-  // same as a flat one, and 0% cannot express the difference.
-  bool batteryPresent = false;
-  bool batteryUsbPresent = false;
-  bool batteryCharging = false;
-  bool batteryFull = false;
-  uint8_t batteryPercent = 0;
-  uint16_t batteryMilliVolts = 0;
 };

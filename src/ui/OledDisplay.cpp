@@ -12,14 +12,9 @@ namespace {
 
 bool headerDiffers(const DeviceStatus& a, const DeviceStatus& b) {
   // Only what is actually drawn. Uptime, the client count and the drop count
-  // left the header, so comparing them would repaint for nothing; the battery
-  // fields arrived, and omitting one freezes it on a stale value.
+  // are not in the header, so comparing them would repaint for nothing; a field
+  // that IS drawn and omitted here freezes on a stale value.
   return a.mode != b.mode || (a.holdMs / 100u) != (b.holdMs / 100u) ||
-         a.batteryPresent != b.batteryPresent ||
-         a.batteryCharging != b.batteryCharging ||
-         a.batteryFull != b.batteryFull ||
-         a.batteryPercent != b.batteryPercent ||
-         a.batteryMilliVolts != b.batteryMilliVolts ||
          a.gpsPresent != b.gpsPresent || a.gpsTimeValid != b.gpsTimeValid ||
          a.gpsFix.satellites != b.gpsFix.satellites ||
          a.gpsFix.fixType != b.gpsFix.fixType ||
@@ -92,23 +87,6 @@ void OledDisplay::draw(const DeviceStatus& status) {
   // 1 KB over I2C at 400 kHz is about 25 ms, inside the 100 ms budget.
   u8g2_.clearBuffer();
 
-  // Battery on the left. The state character sits between the percentage and
-  // the voltage so the two numbers stay adjacent and readable at a glance.
-  char left[kCols + 1];
-  if (!status.batteryPresent) {
-    // No cell fitted. "0%- 0.00V" would be a lie, and a bench T-Beam running
-    // on USB alone is how most of this gets tested.
-    snprintf(left, sizeof(left), "USB");
-  } else {
-    const char state = status.batteryFull      ? '='
-                       : status.batteryCharging ? '+'
-                                                : '-';
-    snprintf(left, sizeof(left), "%u%%%c %u.%02uV",
-             static_cast<unsigned>(status.batteryPercent), state,
-             static_cast<unsigned>(status.batteryMilliVolts / 1000u),
-             static_cast<unsigned>((status.batteryMilliVolts % 1000u) / 10u));
-  }
-
   // Which radio is running, and nothing about who is connected to it. The
   // client and drop counts are in /api/status, which is where they are read.
   char right[kCols + 1];
@@ -129,11 +107,10 @@ void OledDisplay::draw(const DeviceStatus& status) {
              status.mode == RadioMode::Wifi ? "AP" : "BLE");
   }
 
-  // One inverse-video row. Widest case is "100%= 4.20V" (11) against
-  // "HOLD 3s" (7), which is 20 of 21 columns with a separator.
+  // One inverse-video row, right-aligned. The left of the bar is free now that
+  // the battery readout is gone.
   u8g2_.drawBox(0, 0, 128, kHeaderRows * kRowHeight);
   u8g2_.setDrawColor(0);
-  u8g2_.drawStr(1, kRowHeight - 1, left);
   u8g2_.drawStr(128 - 1 - u8g2_.getStrWidth(right), kRowHeight - 1, right);
   u8g2_.setDrawColor(1);
 

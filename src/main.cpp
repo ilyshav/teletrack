@@ -291,14 +291,6 @@ DeviceStatus buildStatus(uint32_t nowMs) {
   s.gpsPresent = app.gpsRx.present();
   s.gpsTimeValid = app.gpsRx.timeValid();
   s.gpsFix = app.gpsRx.fix();
-
-  const BatteryState battery = app.pmu.battery();
-  s.batteryPresent = battery.present;
-  s.batteryUsbPresent = battery.usbPresent;
-  s.batteryCharging = battery.charging;
-  s.batteryFull = battery.full;
-  s.batteryPercent = battery.percent;
-  s.batteryMilliVolts = battery.milliVolts;
   return s;
 }
 
@@ -352,9 +344,6 @@ void setup() {
 
 void loop() {
   const uint32_t now = millis();
-
-  // Re-reads the battery at most once a second; cheap on every other pass.
-  app.pmu.tick(now);
 
   // A device-name save flags this; acted on here, never inside the request
   // handler, and only once the response has had a moment to leave the async
